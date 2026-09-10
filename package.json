@@ -1,0 +1,36 @@
+{
+  "name": "slidev-pptx-export",
+  "version": "0.1.0",
+  "description": "Convert a Slidev markdown deck into a fully editable native .pptx - real PowerPoint text boxes, tables, shapes and charts, not a screenshot-per-slide export.",
+  "type": "module",
+  "main": "src/index.mjs",
+  "bin": {
+    "slidev-pptx-export": "bin/cli.mjs"
+  },
+  "files": [
+    "src",
+    "bin"
+  ],
+  "keywords": [
+    "slidev",
+    "pptx",
+    "powerpoint",
+    "markdown",
+    "presentation",
+    "export"
+  ],
+  "license": "MIT",
+  "author": "Eirik B.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Eiriksb/slidev-pptx-export.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Eiriksb/slidev-pptx-export/issues"
+  },
+  "homepage": "https://github.com/Eiriksb/slidev-pptx-export#readme",
+  "dependencies": {
+    "js-yaml": "^4.1.0",
+    "pptxgenjs": "^4.0.1"
+  }
+}

@@ -9,6 +9,7 @@ import PptxGenJS from "pptxgenjs";
 import { mergeConfig } from "./config.mjs";
 import { splitSlides, parseSlide } from "./parse.mjs";
 import { renderSlide } from "./render.mjs";
+import { stripPhantomSlideMasterEntries } from "./fix-pptx.mjs";
 
 /**
  * @param {object} options
@@ -57,6 +58,7 @@ export async function convert(options) {
 
   const outputPath = resolve(options.outputPath || `${basename(inputPath, extname(inputPath))}-editable.pptx`);
   await pptx.writeFile({ fileName: outputPath });
+  await stripPhantomSlideMasterEntries(outputPath);
 
   const chartBlocks = parsed.flatMap((s) => s.blocks).filter((b) => b.type === "chart");
   const translatedCharts = chartBlocks.filter((b) => b.resolved).length;

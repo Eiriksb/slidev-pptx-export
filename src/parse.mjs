@@ -133,34 +133,35 @@ function classToStyle(cls, styleAttr, config) {
   return { size, bold: true, color, align };
 }
 
-function mdInlineToRuns(text, baseOpts, config) {
-  // FONT_BODY is the default for every run - a run only departs from it for inline `code`
-  // (FONT_MONO). pptxgenjs text boxes don't inherit the presentation theme's font the way
-  // placeholder text does, so this has to be stamped explicitly on every run or it silently
-  // falls back to Calibri.
-  const base = { fontFace: config.fonts.body, ...baseOpts };
-  const runs = [];
+// Inline markdown -> tokens. Pure markdown only: what a token *looks* like (colors, fonts) is
+// decided by layout.mjs.
+export function mdInlineTokens(text) {
+  const tokens = [];
   const re = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g;
   let last = 0;
   let m;
   while ((m = re.exec(text))) {
-    if (m.index > last) runs.push({ text: text.slice(last, m.index), options: { ...base } });
+    if (m.index > last) tokens.push({ text: text.slice(last, m.index) });
     const token = m[0];
-    if (token.startsWith("**")) {
-      runs.push({ text: token.slice(2, -2), options: { ...base, bold: true, color: config.colors.accentDark } });
-    } else if (token.startsWith("`")) {
-      runs.push({
-        text: token.slice(1, -1),
-        options: { ...base, fontFace: config.fonts.mono, color: config.colors.accentDark },
-      });
-    } else {
-      runs.push({ text: token.slice(1, -1), options: { ...base, italic: true } });
-    }
+    if (token.startsWith("**")) tokens.push({ text: token.slice(2, -2), bold: true });
+    else if (token.startsWith("`")) tokens.push({ text: token.slice(1, -1), code: true });
+    else tokens.push({ text: token.slice(1, -1), italic: true });
     last = re.lastIndex;
   }
-  if (last < text.length) runs.push({ text: text.slice(last), options: { ...base } });
-  if (runs.length === 0) runs.push({ text, options: { ...base } });
-  return runs;
+  if (last < text.length) tokens.push({ text: text.slice(last) });
+  if (tokens.length === 0) tokens.push({ text });
+  return tokens;
+}
+
+// pptxgenjs-shaped runs for the legacy renderer (render.mjs); removed together with it.
+function mdInlineToRuns(text, baseOpts, config) {
+  const base = { fontFace: config.fonts.body, ...baseOpts };
+  return mdInlineTokens(text).map((t) => {
+    if (t.bold) return { text: t.text, options: { ...base, bold: true, color: config.colors.accentDark } };
+    if (t.code) return { text: t.text, options: { ...base, fontFace: config.fonts.mono, color: config.colors.accentDark } };
+    if (t.italic) return { text: t.text, options: { ...base, italic: true } };
+    return { text: t.text, options: { ...base } };
+  });
 }
 
 function parseTable(text) {
@@ -406,8 +407,18 @@ export function parseSlide(content, codeStore, config) {
     return `\n\n@@CODEBLOCK_${idx}@@\n\n`;
   });
 
+  // Speaker notes: Slidev treats the slide's last HTML comment as its notes when nothing but
+  // whitespace follows it. The capture can't contain "<!--", so an earlier comment never
+  // swallows the real one. Runs after code fences are tokenized so comments in code are kept.
+  let notes = null;
+  const notesMatch = /<!--((?:(?!<!--)[\s\S])*?)-->\s*$/.exec(text);
+  if (notesMatch) {
+    notes = notesMatch[1].trim() || null;
+    text = text.slice(0, notesMatch.index);
+  }
+
   const blocks = flattenContent(text, config);
-  return { eyebrow, title, blocks };
+  return { eyebrow, title, blocks, notes };
 }
 
 export { mdInlineToRuns };

@@ -29,9 +29,16 @@
     "url": "https://github.com/Eiriksb/slidev-pptx-export/issues"
   },
   "homepage": "https://github.com/Eiriksb/slidev-pptx-export#readme",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "render": "node scripts/render.mjs"
+  },
   "dependencies": {
     "js-yaml": "^4.1.0",
     "jszip": "^3.10.1",
     "pptxgenjs": "^4.0.1"
+  },
+  "devDependencies": {
+    "@xmldom/xmldom": "^0.9.12"
   }
 }

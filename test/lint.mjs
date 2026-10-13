@@ -82,6 +82,7 @@ export async function lintPackage(buffer, label = "") {
 
   // Per-part checks.
   const masterLayoutIds = new Set();
+  const sldIds = new Set();
   for (const [n, doc] of docs) {
     if (n.endsWith(".rels") || n === "[Content_Types].xml") continue;
     const cNvPrIds = new Set();
@@ -114,6 +115,8 @@ export async function lintPackage(buffer, label = "") {
       if (el.localName === "sldId") {
         const id = Number(el.getAttribute("id"));
         if (!(id >= 256)) report(`${n}: sldId ${id} < 256`);
+        if (sldIds.has(id)) report(`${n}: sldId ${id} used twice`);
+        sldIds.add(id);
       }
       if (el.localName === "sldMasterId" || el.localName === "sldLayoutId") {
         const id = Number(el.getAttribute("id"));

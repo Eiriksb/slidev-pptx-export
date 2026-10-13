@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Package, REL, CT } from "../src/ooxml/package.mjs";
+import { Package, CT } from "../src/ooxml/package.mjs";
 import { lintPackage } from "./lint.mjs";
 
 const P = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
@@ -59,4 +59,11 @@ test("flags an Override for a part that is missing (pptxgenjs#1449)", async () =
   zip.file("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/slideMasters/slideMaster2.xml" ContentType="x"/></Types>');
   const problems = await lintPackage(await zip.generateAsync({ type: "nodebuffer" }));
   assert.ok(problems.some((p) => /Override for missing part \/ppt\/slideMasters\/slideMaster2.xml/.test(p)), problems.join("\n"));
+});
+
+test("flags duplicate slide ids", async () => {
+  const pkg = new Package();
+  pkg.addXml("/ppt/presentation.xml", CT.presentation, '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldIdLst><p:sldId id="256"/><p:sldId id="256"/></p:sldIdLst></p:presentation>');
+  const problems = await lintPackage(await pkg.toBuffer());
+  assert.ok(problems.some((p) => /sldId 256 used twice/.test(p)), problems.join("\n"));
 });

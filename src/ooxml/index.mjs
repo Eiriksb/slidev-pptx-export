@@ -11,6 +11,8 @@ import { layoutDefs, layoutXml, masterXml } from "./master.mjs";
 import { placeholderXml, shapeXml, pictureXml, slideXml, graphicFrameXml } from "./shapes.mjs";
 import { presentationXml, presPropsXml, viewPropsXml, appXml, coreXml } from "./presentation.mjs";
 import { TABLE_URI, tableXml, tableStylesXml } from "./table.mjs";
+import { CHART_URI, chartXml, chartRefXml } from "./chart.mjs";
+import { chartWorkbook } from "./xlsx.mjs";
 
 const PRES = "/ppt/presentation.xml";
 const MASTER = "/ppt/slideMasters/slideMaster1.xml";
@@ -47,6 +49,16 @@ async function shapeToXml(shape, id, env) {
     }
     case "table":
       return graphicFrameXml({ id, name: `Table ${id}`, box: shape, uri: TABLE_URI, inner: tableXml(shape, ctx) });
+    case "chart": {
+      const n = ++env.counters.chart;
+      const chartPart = `/ppt/charts/chart${n}.xml`;
+      const workbookPart = `/ppt/embeddings/Microsoft_Excel_Worksheet${n}.xlsx`;
+      pkg.addMedia(workbookPart, await chartWorkbook(shape.chart));
+      const workbookRId = pkg.rel(chartPart, workbookPart, REL.package);
+      pkg.addXml(chartPart, CT.chart, chartXml(shape.chart, { lang: ctx.lang, workbookRId }));
+      const rId = pkg.rel(part, chartPart, REL.chart);
+      return graphicFrameXml({ id, name: `Chart ${id}`, box: shape, uri: CHART_URI, inner: chartRefXml(rId) });
+    }
     default:
       throw new Error(`Unknown shape kind ${JSON.stringify(shape.kind)}`);
   }

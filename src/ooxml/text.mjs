@@ -94,7 +94,10 @@ function paraXml(para, ctx, opts) {
 
 export function bodyPrXml(body = {}) {
   const attrs = [];
-  if (!body.placeholder && body.wrap !== false) attrs.push('wrap="square"');
+  if (!body.placeholder) {
+    if (body.wrap === false) attrs.push('wrap="none"');
+    else attrs.push('wrap="square"');
+  }
   if (body.inset != null) {
     const i = emu(body.inset);
     attrs.push(`lIns="${i}" tIns="${i}" rIns="${i}" bIns="${i}"`);

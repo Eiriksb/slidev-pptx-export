@@ -78,6 +78,7 @@ test("bodyPr: attributes only when set, autofit children", () => {
   assert.equal(bodyPrXml({ placeholder: true, fontScale: 0.85 }), '<a:bodyPr><a:normAutofit fontScale="85000" lnSpcReduction="10000"/></a:bodyPr>');
   assert.equal(bodyPrXml({ anchor: "ctr", inset: 0.1 }), '<a:bodyPr wrap="square" lIns="91440" tIns="91440" rIns="91440" bIns="91440" anchor="ctr" rtlCol="0"/>');
   assert.equal(bodyPrXml({ placeholder: true, autofit: "norm", anchor: "b" }), '<a:bodyPr anchor="b"><a:normAutofit/></a:bodyPr>');
+  assert.equal(bodyPrXml({ wrap: false }), '<a:bodyPr wrap="none" rtlCol="0"/>');
 });
 
 test("a run with a link but no link callback throws", () => {

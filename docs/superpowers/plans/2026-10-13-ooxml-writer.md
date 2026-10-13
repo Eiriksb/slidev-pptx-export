@@ -104,10 +104,11 @@ test("esc escapes markup characters", () => {
 
 test("esc strips characters XML 1.0 forbids", () => {
   assert.equal(esc("a\u0001b\u0008c\u000Bd"), "abcd");
-  assert.equal(esc("x￾y￿z"), "xyz");
+  assert.equal(esc("x\uFFFEy\uFFFFz"), "xyz");
   assert.equal(esc("lone\uD800surrogate"), "lonesurrogate");
   assert.equal(esc("keep\t\n\r"), "keep\t\n\r");
   assert.equal(esc("emoji 😀"), "emoji 😀");
+  assert.equal(esc("\uE000\uFB01\uFF21\uFFFC\uFFFD"), "\uE000\uFB01\uFF21\uFFFC\uFFFD"); // valid BMP text above U+E000 is kept
 });
 
 test("esc handles null/undefined/numbers", () => {
@@ -171,7 +172,7 @@ export const NS_PML = `xmlns:a="${NS.a}" xmlns:r="${NS.r}" xmlns:p="${NS.p}"`;
 // flag a lone surrogate is its own code point, so it falls outside every allowed range and is
 // stripped too - JS strings can carry those (Rust strings can't), and one is enough to make
 // PowerPoint reject the whole part.
-const INVALID_XML_CHARS = /[^\t\n\r -퟿-�\u{10000}-\u{10FFFF}]/gu;
+const INVALID_XML_CHARS = /[^\t\n\r\u0020-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/gu;
 
 export function esc(value) {
   return String(value ?? "")

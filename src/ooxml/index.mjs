@@ -13,10 +13,12 @@ import { presentationXml, presPropsXml, viewPropsXml, appXml, coreXml } from "./
 import { TABLE_URI, tableXml, tableStylesXml } from "./table.mjs";
 import { CHART_URI, chartXml, chartRefXml } from "./chart.mjs";
 import { chartWorkbook } from "./xlsx.mjs";
+import { notesMasterXml, notesSlideXml } from "./notes.mjs";
 
 const PRES = "/ppt/presentation.xml";
 const MASTER = "/ppt/slideMasters/slideMaster1.xml";
 const THEME = "/ppt/theme/theme1.xml";
+const NOTES_MASTER = "/ppt/notesMasters/notesMaster1.xml";
 
 // Each distinct image is stored once, however many slides (or the master) use it.
 class MediaStore {
@@ -92,6 +94,19 @@ export async function writePptx(slides, deck) {
   const logo = deck.logo ? { rId: pkg.rel(MASTER, media.add(deck.logo.path), REL.image), box: deck.logo.box } : null;
   pkg.addXml(MASTER, CT.slideMaster, masterXml({ geometry: deck.geometry, ctx, layoutIds, logo }));
 
+  // The notes master (with its own theme - every master needs one) only exists if some slide
+  // has notes.
+  const hasNotes = slides.some((s) => s.notes);
+  let notesMasterRId = null;
+  if (hasNotes) {
+    const NOTES_THEME = "/ppt/theme/theme2.xml";
+    pkg.addXml(NOTES_THEME, CT.theme, themeXml({ name: "Notes", colors: deck.theme, fonts: deck.fonts }));
+    pkg.addXml(NOTES_MASTER, CT.notesMaster, notesMasterXml(ctx));
+    pkg.rel(NOTES_MASTER, NOTES_THEME, REL.theme);
+    notesMasterRId = pkg.rel(PRES, NOTES_MASTER, REL.notesMaster);
+  }
+  let notesCount = 0;
+
   const slideRefs = [];
   for (const [i, spec] of slides.entries()) {
     const part = `/ppt/slides/slide${i + 1}.xml`;
@@ -116,6 +131,14 @@ export async function writePptx(slides, deck) {
     for (const shape of spec.shapes || []) xml += await shapeToXml(shape, nextId++, env);
 
     pkg.addXml(part, CT.slide, slideXml(xml));
+    if (spec.notes) {
+      const notesPart = `/ppt/notesSlides/notesSlide${i + 1}.xml`;
+      pkg.addXml(notesPart, CT.notesSlide, notesSlideXml(spec.notes, ctx));
+      pkg.rel(notesPart, NOTES_MASTER, REL.notesMaster);
+      pkg.rel(notesPart, part, REL.slide);
+      pkg.rel(part, notesPart, REL.notesSlide);
+      notesCount++;
+    }
     slideRefs.push({ id: 256 + i, rId: pkg.rel(PRES, part, REL.slide) });
   }
 
@@ -129,10 +152,10 @@ export async function writePptx(slides, deck) {
     pkg.rel(PRES, name, rel);
   }
   pkg.addXml(PRES, CT.presentation, presentationXml({
-    masterId, masterRId, notesMasterRId: null, slides: slideRefs,
+    masterId, masterRId, notesMasterRId, slides: slideRefs,
     width: deck.geometry.width, height: deck.geometry.height,
   }));
   pkg.addXml("/docProps/core.xml", CT.coreProps, coreXml({ title: deck.title, author: deck.author, date: deck.timestamps ? new Date() : null }));
-  pkg.addXml("/docProps/app.xml", CT.extProps, appXml({ slides: slides.length, notes: 0 }));
+  pkg.addXml("/docProps/app.xml", CT.extProps, appXml({ slides: slides.length, notes: notesCount }));
   return pkg.toBuffer();
 }

@@ -8,11 +8,11 @@ test("esc escapes markup characters", () => {
 
 test("esc strips characters XML 1.0 forbids", () => {
   assert.equal(esc("a\u0001b\u0008c\u000Bd"), "abcd");
-  assert.equal(esc("x￾y￿z"), "xyz");
+  assert.equal(esc("x\uFFFEy\uFFFFz"), "xyz");
   assert.equal(esc("lone\uD800surrogate"), "lonesurrogate");
   assert.equal(esc("keep\t\n\r"), "keep\t\n\r");
   assert.equal(esc("emoji 😀"), "emoji 😀");
-  assert.equal(esc("ﬁＡ￼�"), "ﬁＡ￼�"); // valid BMP text above U+E000 is kept
+  assert.equal(esc("\uFB01\uFF21\uFFFC\uFFFD"), "\uFB01\uFF21\uFFFC\uFFFD"); // valid BMP text above U+E000 is kept
 });
 
 test("esc handles null/undefined/numbers", () => {

@@ -19,7 +19,7 @@ export const NS_PML = `xmlns:a="${NS.a}" xmlns:r="${NS.r}" xmlns:p="${NS.p}"`;
 // flag a lone surrogate is its own code point, so it falls outside every allowed range and is
 // stripped too - JS strings can carry those (Rust strings can't), and one is enough to make
 // PowerPoint reject the whole part.
-const INVALID_XML_CHARS = /[^\t\n\r -퟿-�\u{10000}-\u{10FFFF}]/gu;
+const INVALID_XML_CHARS = /[^\t\n\r -퟿-�\u{10000}-\u{10FFFF}]/gu;
 
 export function esc(value) {
   return String(value ?? "")

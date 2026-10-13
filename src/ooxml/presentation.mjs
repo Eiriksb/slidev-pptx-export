@@ -34,9 +34,6 @@ export function viewPropsXml() {
   );
 }
 
-// Replaced by table.mjs's tableStylesXml() once deck table styles exist (Task 9).
-export const EMPTY_TABLE_STYLES = `${XML_DECL}<a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"/>`;
-
 export function appXml({ slides, notes }) {
   return (
     `${XML_DECL}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" ` +

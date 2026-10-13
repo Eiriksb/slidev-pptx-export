@@ -8,8 +8,9 @@ import { createHash } from "node:crypto";
 import { Package, REL, CT } from "./package.mjs";
 import { themeXml } from "./theme.mjs";
 import { layoutDefs, layoutXml, masterXml } from "./master.mjs";
-import { placeholderXml, shapeXml, pictureXml, slideXml } from "./shapes.mjs";
-import { presentationXml, presPropsXml, viewPropsXml, EMPTY_TABLE_STYLES, appXml, coreXml } from "./presentation.mjs";
+import { placeholderXml, shapeXml, pictureXml, slideXml, graphicFrameXml } from "./shapes.mjs";
+import { presentationXml, presPropsXml, viewPropsXml, appXml, coreXml } from "./presentation.mjs";
+import { TABLE_URI, tableXml, tableStylesXml } from "./table.mjs";
 
 const PRES = "/ppt/presentation.xml";
 const MASTER = "/ppt/slideMasters/slideMaster1.xml";
@@ -44,6 +45,8 @@ async function shapeToXml(shape, id, env) {
       const rId = pkg.rel(part, media.add(shape.path), REL.image);
       return pictureXml({ id, name: `Picture ${id}`, descr: shape.alt, rId, box: shape });
     }
+    case "table":
+      return graphicFrameXml({ id, name: `Table ${id}`, box: shape, uri: TABLE_URI, inner: tableXml(shape, ctx) });
     default:
       throw new Error(`Unknown shape kind ${JSON.stringify(shape.kind)}`);
   }
@@ -108,7 +111,7 @@ export async function writePptx(slides, deck) {
   for (const [name, type, rel, xml] of [
     ["/ppt/presProps.xml", CT.presProps, REL.presProps, presPropsXml()],
     ["/ppt/viewProps.xml", CT.viewProps, REL.viewProps, viewPropsXml()],
-    ["/ppt/tableStyles.xml", CT.tableStyles, REL.tableStyles, EMPTY_TABLE_STYLES],
+    ["/ppt/tableStyles.xml", CT.tableStyles, REL.tableStyles, tableStylesXml()],
   ]) {
     pkg.addXml(name, type, xml);
     pkg.rel(PRES, name, rel);

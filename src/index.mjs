@@ -13,17 +13,18 @@ import { writePptx } from "./ooxml/index.mjs";
 
 const LOGO_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif"]);
 
-// Footer logo drawn bottom-left on every slide (it lives on the slide master), or null when
-// none is configured or the file isn't a format PowerPoint embeds natively.
-function logoFor(config, geometry) {
-  const logo = config.logo;
-  if (!logo || !logo.path || !existsSync(logo.path)) return null;
-  if (!LOGO_EXTS.has(extname(logo.path).toLowerCase())) {
-    console.warn(`Warning: logo ${logo.path} is not PNG/JPEG/GIF - skipped.`);
+// The footer logo config with its path resolved, or null when none is configured or the file
+// is missing or isn't a format PowerPoint embeds natively. Resolved before layout, because the
+// slide geometry reserves footer space only for a logo that will actually be drawn.
+function usableLogo(logo, configDir) {
+  if (!logo || !logo.path) return null;
+  const path = resolve(configDir, logo.path);
+  if (!existsSync(path)) return null;
+  if (!LOGO_EXTS.has(extname(path).toLowerCase())) {
+    console.warn(`Warning: logo ${path} is not PNG/JPEG/GIF - skipped.`);
     return null;
   }
-  const h = logo.height || 0.27;
-  return { path: logo.path, box: { x: 0.5, y: geometry.height - 0.29 - h, w: h * (logo.aspect || 1), h } };
+  return { ...logo, path };
 }
 
 /**
@@ -51,9 +52,7 @@ export async function convert(options) {
     console.warn(`Warning: data directory "${config.dataDir}" not found next to ${basename(inputPath)} - charts will fall back to placeholders.`);
   }
 
-  if (config.logo && config.logo.path) {
-    config.logo = { ...config.logo, path: resolve(configDir, config.logo.path) };
-  }
+  config.logo = usableLogo(config.logo, configDir);
 
   const { globalFrontmatter, slides } = splitSlides(raw);
   const codeStore = [];
@@ -69,7 +68,8 @@ export async function convert(options) {
     title: globalFrontmatter.title || basename(inputPath, extname(inputPath)),
     author: config.author,
     timestamps: config.timestamps === true,
-    logo: logoFor(config, style.geometry),
+    // Drawn bottom-left on every slide via the slide master.
+    logo: config.logo ? { path: config.logo.path, box: style.geometry.logo } : null,
   });
 
   const outputPath = resolve(options.outputPath || `${basename(inputPath, extname(inputPath))}-editable.pptx`);
@@ -79,7 +79,8 @@ export async function convert(options) {
   const translatedCharts = chartBlocks.filter((b) => b.resolved).length;
   const unresolvedCharts = [...new Set(chartBlocks.filter((b) => !b.resolved).map((b) => b.name))];
 
-  return { outputPath, slideCount: parsed.length, translatedCharts, unresolvedCharts };
+  // specs, not parsed slides: a long table can continue onto extra slides.
+  return { outputPath, slideCount: specs.length, translatedCharts, unresolvedCharts };
 }
 
 export { mergeConfig } from "./config.mjs";

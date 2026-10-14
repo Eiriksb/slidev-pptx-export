@@ -32,6 +32,12 @@ test("table: style id + header flag, padded rows, grid widths sum to frame width
   assert.doesNotMatch(xml, /<a:tcPr[^>]*>.*<a:solidFill/);
 });
 
+test("rows share the frame height evenly unless the shape gives per-row heights", () => {
+  const heights = (xml) => byLocal(parseXml(`<x xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${xml}</x>`), "tr").map((r) => Number(r.getAttribute("h")));
+  assert.deepEqual(heights(tableXml(TABLE, ctx)), [365760, 365760, 365760]);
+  assert.deepEqual(heights(tableXml({ ...TABLE, rowH: [0.3, 0.5, 0.4] }, ctx)), [274320, 457200, 365760]);
+});
+
 test("deflist variant: own style, no header, explicit column widths, centered cells", () => {
   const xml = tableXml({ ...TABLE, header: false, variant: "deflist", colW: [2.4, 3.6], rows: [[cell("t"), cell("d")]] }, ctx);
   assert.match(xml, /<a:tblPr bandRow="0"><a:tableStyleId>/);

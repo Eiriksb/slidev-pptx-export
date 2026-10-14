@@ -40,17 +40,20 @@ export function tableStylesXml() {
 export function tableXml(shape, ctx) {
   const cols = Math.max(1, ...shape.rows.map((r) => r.length));
   const widths = shape.colW && shape.colW.length === cols ? shape.colW : Array(cols).fill(shape.w / cols);
-  const rowH = emuSize(shape.h / Math.max(1, shape.rows.length));
+  // A row's h is its minimum height (rows still grow to fit their text). `rowH` (inches per
+  // row) lets the layout give wrapped rows more room; otherwise the frame height is shared.
+  const evenH = shape.h / Math.max(1, shape.rows.length);
+  const rowH = (i) => emuSize(shape.rowH && shape.rowH.length === shape.rows.length ? shape.rowH[i] : evenH);
   const deflist = shape.variant === "deflist";
   const mar = deflist ? [76200, 76200, 50800, 50800] : [91440, 91440, 45720, 45720];
   const tcPr = `<a:tcPr marL="${mar[0]}" marR="${mar[1]}" marT="${mar[2]}" marB="${mar[3]}"${deflist ? ' anchor="ctr"' : ""}/>`;
   const rows = shape.rows
-    .map((row) => {
+    .map((row, ri) => {
       // Short rows are padded to the grid width - a row with fewer a:tc than gridCols is a
       // repair prompt.
       const cells = Array.from({ length: cols }, (_, i) => row[i] || []);
       // Cell bodies are written like placeholder bodies: a bare <a:bodyPr/>, no wrap/inset attrs.
-      return `<a:tr h="${rowH}">${cells.map((paras) => `<a:tc>${txBodyXml(paras, ctx, { placeholder: true }, "a:txBody")}${tcPr}</a:tc>`).join("")}</a:tr>`;
+      return `<a:tr h="${rowH(ri)}">${cells.map((paras) => `<a:tc>${txBodyXml(paras, ctx, { placeholder: true }, "a:txBody")}${tcPr}</a:tc>`).join("")}</a:tr>`;
     })
     .join("");
   const styleId = deflist ? TABLE_STYLES.deflist : TABLE_STYLES.default;

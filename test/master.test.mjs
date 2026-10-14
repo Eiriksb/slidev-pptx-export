@@ -17,6 +17,22 @@ test("geometry reserves the eyebrow band above the title", () => {
   assert.ok(Math.abs(g.body.h - 5.55) < 1e-9);
   assert.ok(Math.abs(g.coverTitle.y - 2.7) < 1e-9);
   assert.ok(Math.abs(g.coverSubtitle.y - 4.1) < 1e-9);
+  assert.equal(g.logo, null);
+  assert.equal(g.bottomMargin, 0.35);
+});
+
+test("with a footer logo, the body ends 0.1in above the logo instead of 0.35in above the edge", () => {
+  const gl = slideGeometry({ width: 13.333, height: 7.5, marginX: 0.6 }, { height: 0.27, aspect: 2 });
+  assert.equal(gl.logo.x, 0.5);
+  assert.ok(Math.abs(gl.logo.y - 6.94) < 1e-9);
+  assert.ok(Math.abs(gl.logo.w - 0.54) < 1e-9);
+  assert.equal(gl.logo.h, 0.27);
+  assert.ok(Math.abs(gl.bottomMargin - 0.66) < 1e-9);
+  assert.ok(Math.abs(gl.body.y + gl.body.h - (gl.logo.y - 0.1)) < 1e-9);
+  // Defaults match the old footer placement: 0.27in tall, square unless an aspect is given.
+  const gd = slideGeometry({ width: 13.333, height: 7.5, marginX: 0.6 }, {});
+  assert.equal(gd.logo.h, 0.27);
+  assert.equal(gd.logo.w, 0.27);
 });
 
 test("layout catalogue has the expected keys, types and placeholders", () => {

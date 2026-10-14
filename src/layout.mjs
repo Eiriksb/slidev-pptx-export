@@ -24,7 +24,8 @@ export function deckStyle(config) {
   return {
     config,
     theme,
-    geometry: slideGeometry(config.slide),
+    // Body areas end above the footer logo when the deck has one (convert() drops unusable logos).
+    geometry: slideGeometry(config.slide, config.logo && config.logo.path ? config.logo : null),
     color: {
       text: slot("text"), accentDark: slot("accentDark"), panel: slot("panel"), accent: slot("accent"),
       accent2: slot("accent2"), muted: slot("muted"), border: slot("border"),
@@ -36,8 +37,25 @@ export function deckStyle(config) {
 }
 
 // ---------------------------------------------------------------------------
-// Height estimation (unchanged from the pptxgenjs renderer)
+// Height estimation (carried over from the pptxgenjs renderer)
 // ---------------------------------------------------------------------------
+
+// A one-line table row is its text plus cell margins (~0.32in at 13pt); planning 0.34in, which
+// the writer emits as the row's height, makes rows render at exactly the planned height.
+const TABLE_ROW_H = 0.34;
+const TABLE_PAD = 0.15;
+
+// Estimated height of each table row (header first): every extra line a cell's text wraps onto
+// adds a line to its row. Columns share the width evenly, as the writer lays them out.
+function tableRowHeights(block, width, textSize) {
+  const cols = Math.max(1, ...block.rows.map((r) => r.length));
+  const cellChars = Math.max(8, Math.floor(((width / cols - 0.2) * 72) / (textSize * 0.52)));
+  const lineHeight = (textSize + 5) / 72;
+  return block.rows.map((row) => {
+    const lines = Math.max(1, ...row.map((c) => Math.ceil(c.length / cellChars)));
+    return TABLE_ROW_H + (lines - 1) * lineHeight;
+  });
+}
 
 function estimateBlockHeight(block, width, textSize, codeStore) {
   const charsPerLine = Math.max(20, Math.floor((width * 72) / (textSize * 0.52)));
@@ -59,7 +77,7 @@ function estimateBlockHeight(block, width, textSize, codeStore) {
     case "image":
       return 2.4;
     case "table":
-      return block.rows.length * 0.32 + 0.15;
+      return tableRowHeights(block, width, textSize).reduce((a, b) => a + b, 0) + TABLE_PAD;
     case "deflist": {
       const perLine = Math.max(20, Math.floor((width * 0.58 * 72) / (textSize * 0.52)));
       let total = 0;
@@ -90,15 +108,27 @@ function estimateBlockHeight(block, width, textSize, codeStore) {
   }
 }
 
-function blocksHeight(blocks, width, textSize, codeStore, gap = 0.14) {
+const BLOCK_GAP = 0.14;
+
+function blocksHeight(blocks, width, textSize, codeStore, gap = BLOCK_GAP) {
   let total = 0;
   for (const b of blocks) total += estimateBlockHeight(b, width, textSize, codeStore) + gap;
   return total;
 }
 
-// PowerPoint-style shrink: 2.5% steps, never below 55% (same floor as the free-shape scaling).
+// Text and free shapes shrink to fit, but never below 55% of their size.
+const MIN_SCALE = 0.55;
+
+// PowerPoint-style shrink: 2.5% steps, never below MIN_SCALE (same floor as the free shapes).
 function shrinkScale(available, needed) {
-  return Math.max(0.55, Math.floor((available / needed) * 40) / 40);
+  return Math.max(MIN_SCALE, Math.floor((available / needed) * 40) / 40);
+}
+
+// Even at the floor the estimate doesn't fit: say so, since the content may run off the slide.
+function warnIfOverfull(needed, available, slide, index) {
+  if (needed * MIN_SCALE <= available) return;
+  const title = slide.title ? ` "${slide.title}"` : "";
+  console.warn(`Warning: slide ${index + 1}${title} is still too full after shrinking to 55% - content may run off the slide.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +392,7 @@ function blockShapes(block, x, y, w, textSize, codeStore, scale, S) {
       // also carry b:true directly.
       shapes = [{
         kind: "table", ...box, header: true, variant: "default",
+        rowH: tableRowHeights(block, w, textSize).map((rh) => rh * scale),
         rows: block.rows.map((row, ri) => row.map((c) => [{ runs: inlineRuns(c, ri === 0 ? { font: "body", size: textSize, b: true } : { font: "body", size: textSize }, S) }])),
       }];
       break;
@@ -424,35 +455,116 @@ function sequenceShapes(blocks, x, y, w, textSize, codeStore, scale, S, gap) {
   return { shapes, h: cy - y };
 }
 
-// The old renderer's whole-body flow: pick a text size, scale everything down (to 55% at most)
-// if the estimate doesn't fit, then stack the blocks.
+// The old renderer's whole-body flow: pick a text size, scale everything down (to MIN_SCALE at
+// most) if the estimate doesn't fit, then stack the blocks. `needed` is the unscaled estimate.
 function freeBody(blocks, top, available, codeStore, S) {
   const g = S.geometry;
   const textSize = blocks.length > 5 ? 11 : 13;
   const total = blocksHeight(blocks, g.contentW, textSize, codeStore);
-  const scale = total > available && total > 0 ? Math.max(0.55, available / total) : 1;
+  const scale = total > available && total > 0 ? Math.max(MIN_SCALE, available / total) : 1;
   const drawTextSize = Math.max(9, Math.round(textSize * Math.min(1, scale + 0.3)));
-  return sequenceShapes(blocks, g.marginX, top, g.contentW, drawTextSize, codeStore, scale, S, 0.16 * scale);
+  return { ...sequenceShapes(blocks, g.marginX, top, g.contentW, drawTextSize, codeStore, scale, S, 0.16 * scale), needed: total };
+}
+
+// ---------------------------------------------------------------------------
+// Long tables continue on extra slides
+// ---------------------------------------------------------------------------
+
+// A table row can't get shorter than its text, so scaling a slide with a table down would
+// squeeze the table's box but not its rows, and whatever follows would overlap it. So slides
+// with tables are paged instead of shrunk: a table's rows are split across pages, the header
+// row repeated on each, and any other block that doesn't fit starts the next page. A table
+// that would start with fewer than 2 data rows under other content starts on the next page; a
+// block too tall even for an empty page stays and is shrunk as usual. Heights are estimated at
+// 13pt (the larger of freeBody's two text sizes), so every page fits unscaled.
+function paginateTables(blocks, available, width, codeStore) {
+  const pages = [[]];
+  let used = 0;
+  const newPage = () => {
+    pages.push([]);
+    used = 0;
+  };
+  const heightOf = (block) => estimateBlockHeight(block, width, BODY_PT, codeStore) + BLOCK_GAP;
+  const place = (block) => {
+    pages.at(-1).push(block);
+    used += heightOf(block);
+  };
+  for (const block of blocks) {
+    if (block.type !== "table" || block.rows.length < 2) {
+      if (used + heightOf(block) > available && pages.at(-1).length) newPage();
+      place(block);
+      continue;
+    }
+    const header = block.rows[0];
+    const heights = tableRowHeights(block, width, BODY_PT);
+    let next = 1; // the first data row not placed yet
+    while (next < block.rows.length) {
+      // Data rows that fit on this page beside the header row.
+      const room = available - used - TABLE_PAD - BLOCK_GAP - heights[0];
+      let fit = 0;
+      let h = 0;
+      while (next + fit < block.rows.length && h + heights[next + fit] <= room) {
+        h += heights[next + fit];
+        fit++;
+      }
+      if (next + fit === block.rows.length) {
+        place({ ...block, rows: [header, ...block.rows.slice(next)] });
+        break;
+      }
+      if (fit < 2 && pages.at(-1).length) {
+        // Not worth a header plus a single row here: start the table on the next page.
+        newPage();
+        continue;
+      }
+      const take = Math.max(1, fit);
+      place({ ...block, rows: [header, ...block.rows.slice(next, next + take)] });
+      next += take;
+      newPage();
+    }
+  }
+  return pages;
 }
 
 // ---------------------------------------------------------------------------
 // Slides
 // ---------------------------------------------------------------------------
 
-function layoutCentered(slide, title, textOnly, align, spec, codeStore, S) {
+const CENTER_GAP = 0.2;
+const CENTER_EYEBROW_H = 0.35;
+
+// Room for a centered slide's body if the stack were pinned to the top margin.
+function centeredBodyRoom(slide, g) {
+  const eyebrowH = slide.eyebrow ? CENTER_EYEBROW_H : 0;
+  return g.height - g.bottomMargin - (g.eyebrow.y + eyebrowH + g.title.h + CENTER_GAP);
+}
+
+// Inches a rich (shape-drawn) body gets on this slide - shared by layoutSlide and the
+// table pagination, so pages are planned against the room they're drawn in.
+function richBodyRoom(slide, g) {
+  const fm = slide.frontmatter || {};
+  if (!slide.title) return g.height - g.bottomMargin - g.title.y;
+  if (fm.layout === "center" || fm.layout === "end") return centeredBodyRoom(slide, g);
+  return g.body.h;
+}
+
+function isCover(index, fm) {
+  return index === 0 || /\bcover\b/.test(String(fm.class || "")) || fm.layout === "cover" || fm.layout === "intro";
+}
+
+function layoutCentered(slide, index, title, textOnly, align, spec, codeStore, S) {
   const g = S.geometry;
   const blocks = slide.blocks;
-  const gap = 0.2;
-  const eyebrowH = slide.eyebrow ? 0.35 : 0;
+  const gap = CENTER_GAP;
+  const eyebrowH = slide.eyebrow ? CENTER_EYEBROW_H : 0;
   spec.layout = "centered";
-  // Room for the body if the stack were pinned to the top margin.
-  const maxBodyH = g.height - g.bottomMargin - (g.eyebrow.y + eyebrowH + g.title.h + gap);
+  const maxBodyH = centeredBodyRoom(slide, g);
   let bodyH = 0;
   let free = null;
   if (textOnly) bodyH = blocksHeight(blocks, g.contentW, BODY_PT, codeStore);
   else if (blocks.length) {
     free = freeBody(blocks, 0, maxBodyH, codeStore, S);
     bodyH = free.h;
+    warnIfOverfull(free.needed, maxBodyH, slide, index);
   }
   const stackH = eyebrowH + g.title.h + (blocks.length ? gap + Math.min(bodyH, maxBodyH) : 0);
   const top = Math.max(g.eyebrow.y, (g.height - stackH) / 2);
@@ -466,6 +578,7 @@ function layoutCentered(slide, title, textOnly, align, spec, codeStore, S) {
     spec.placeholders.body = blockParas(blocks, null, S, align);
     spec.placeholders.bodyBox = { ...g.body, y: bodyTop, h: Math.max(0.5, Math.min(bodyH, room)) };
     if (bodyH > room) spec.placeholders.bodyFontScale = shrinkScale(room, bodyH);
+    warnIfOverfull(bodyH, room, slide, index);
   } else if (free) {
     spec.shapes.push(...free.shapes.map((s) => ({ ...s, y: s.y + bodyTop })));
   }
@@ -482,7 +595,7 @@ function layoutSlide(slide, index, codeStore, S) {
   if (slide.notes) spec.notes = slide.notes;
   const title = slide.title ? [{ align, runs: [{ text: slide.title, font: "heading" }] }] : null;
 
-  if (index === 0 || /\bcover\b/.test(cls) || fm.layout === "cover" || fm.layout === "intro") {
+  if (isCover(index, fm)) {
     spec.layout = "title";
     if (slide.eyebrow) spec.shapes.push(eyebrowShape(slide.eyebrow, g.eyebrow, undefined, S));
     if (title) spec.placeholders.title = title;
@@ -494,13 +607,15 @@ function layoutSlide(slide, index, codeStore, S) {
   if (!title) {
     // Nothing for a title placeholder: everything is drawn as shapes on the Blank layout.
     if (slide.eyebrow) spec.shapes.push(eyebrowShape(slide.eyebrow, g.eyebrow, align, S));
-    const top = g.title.y;
-    spec.shapes.push(...freeBody(blocks, top, g.height - g.bottomMargin - top, codeStore, S).shapes);
+    const room = richBodyRoom(slide, g);
+    const free = freeBody(blocks, g.title.y, room, codeStore, S);
+    spec.shapes.push(...free.shapes);
+    warnIfOverfull(free.needed, room, slide, index);
     return spec;
   }
 
   const textOnly = blocks.length > 0 && blocks.every((b) => TEXT_ONLY.has(b.type));
-  if (fm.layout === "center" || fm.layout === "end") return layoutCentered(slide, title, textOnly, align, spec, codeStore, S);
+  if (fm.layout === "center" || fm.layout === "end") return layoutCentered(slide, index, title, textOnly, align, spec, codeStore, S);
 
   if (fm.layout === "section" && (textOnly || blocks.length === 0)) {
     spec.layout = "section";
@@ -510,6 +625,8 @@ function layoutSlide(slide, index, codeStore, S) {
       spec.placeholders.body = blockParas(blocks, null, S, align);
       const needed = blocksHeight(blocks, g.sectionBody.w, BODY_PT, codeStore);
       if (needed > g.sectionBody.h) spec.placeholders.bodyFontScale = shrinkScale(g.sectionBody.h, needed);
+      // The 1in body box can spill downward: only running off the slide is worth a warning.
+      warnIfOverfull(needed, g.height - g.bottomMargin - g.sectionBody.y, slide, index);
     }
     return spec;
   }
@@ -521,14 +638,40 @@ function layoutSlide(slide, index, codeStore, S) {
     spec.placeholders.body = blockParas(blocks, null, S, align);
     const needed = blocksHeight(blocks, g.body.w, BODY_PT, codeStore);
     if (needed > g.body.h) spec.placeholders.bodyFontScale = shrinkScale(g.body.h, needed);
+    warnIfOverfull(needed, g.body.h, slide, index);
     return spec;
   }
   spec.layout = "titleOnly";
-  if (blocks.length) spec.shapes.push(...freeBody(blocks, g.body.y, g.body.h, codeStore, S).shapes);
+  if (blocks.length) {
+    const room = richBodyRoom(slide, g);
+    const free = freeBody(blocks, g.body.y, room, codeStore, S);
+    spec.shapes.push(...free.shapes);
+    warnIfOverfull(free.needed, room, slide, index);
+  }
   return spec;
+}
+
+// One parsed slide -> its SlideSpecs: normally one, more when a long table continues onto
+// extra slides. `index` is the slide's position in the export (0 = the deck's first slide). Continuation slides repeat the eyebrow and layout, add "(cont.)" to the title
+// and carry no speaker notes.
+function slideSpecs(slide, index, codeStore, S) {
+  const g = S.geometry;
+  const fm = slide.frontmatter || {};
+  if (isCover(index, fm) || !slide.blocks.some((b) => b.type === "table")) return [layoutSlide(slide, index, codeStore, S)];
+  const pages = paginateTables(slide.blocks, richBodyRoom(slide, g), g.contentW, codeStore);
+  return pages.map((blocks, i) => layoutSlide({
+    ...slide,
+    blocks,
+    title: i && slide.title ? `${slide.title} (cont.)` : slide.title,
+    notes: i ? null : slide.notes,
+  }, index + i, codeStore, S));
 }
 
 export function layoutDeck(parsedSlides, codeStore, config) {
   const S = deckStyle(config);
-  return parsedSlides.map((slide, i) => layoutSlide(slide, i, codeStore, S));
+  // Slides are numbered by their position in the export, so a warning about slide N matches
+  // slide N in the .pptx even after an earlier table continued onto extra slides.
+  const specs = [];
+  for (const slide of parsedSlides) specs.push(...slideSpecs(slide, specs.length, codeStore, S));
+  return specs;
 }

@@ -45,7 +45,8 @@ export const defaultConfig = {
   eyebrowClass: "eyebrow",
 
   // Optional footer logo image drawn bottom-left on every slide (skipped if null or the
-  // file doesn't exist). `path` is resolved relative to the config file itself.
+  // file doesn't exist). `path` is resolved relative to the config file itself. Slide bodies
+  // end 0.1in above the logo, so content never runs into it.
   logo: null, // { path: string, aspect: number, height?: number }
 
   // Directory chart resolvers may read data files from, relative to the input .md file.

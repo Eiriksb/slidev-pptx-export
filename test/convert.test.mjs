@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, mkdtempSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,6 +68,52 @@ test("theme, fonts, logo and document title come from the deck", async () => {
   assert.match(theme, /<a:majorFont><a:latin typeface="Plus Jakarta Sans"\/>/);
   assert.match(z.text("ppt/slideMasters/slideMaster1.xml"), /name="Logo"/);
   assert.match(z.text("docProps/core.xml"), /<dc:title>Kitchen Sink<\/dc:title><dc:creator>Fixture<\/dc:creator>/);
+});
+
+const EMU = 914400;
+// Top and bottom (inches) of a named shape's xfrm in a part.
+function shapeSpan(doc, shapeName) {
+  const nv = byLocal(doc, "cNvPr").find((e) => e.getAttribute("name") === shapeName);
+  const xfrm = byLocal(nv.parentNode.parentNode, "xfrm")[0];
+  const y = Number(byLocal(xfrm, "off")[0].getAttribute("y")) / EMU;
+  return { top: y, bottom: y + Number(byLocal(xfrm, "ext")[0].getAttribute("cy")) / EMU };
+}
+function contentLayout(z) {
+  const name = z.names.find((n) => /^ppt\/slideLayouts\/slideLayout\d+\.xml$/.test(n)
+    && byLocal(z.xml(n), "cSld")[0].getAttribute("name") === "Title and Content");
+  return z.xml(name);
+}
+
+test("the content layout's body placeholder ends 0.1in above the footer logo", async () => {
+  const { z } = await exportFixture("logo.pptx");
+  const logo = shapeSpan(z.xml("ppt/slideMasters/slideMaster1.xml"), "Logo");
+  const body = shapeSpan(contentLayout(z), "Content Placeholder 2");
+  assert.ok(Math.abs(body.bottom - (logo.top - 0.1)) < 0.001, `body ends ${body.bottom}, logo starts ${logo.top}`);
+});
+
+test("a logo that can't be embedded reserves no footer space", async () => {
+  const result = await convert({
+    inputPath: join(DIR, "slides.md"), outputPath: join(OUT, "nologo.pptx"),
+    config: { ...fixtureConfig, logo: { path: "./public/missing.png", aspect: 2 } }, configDir: DIR,
+  });
+  const z = await unzip(readFileSync(result.outputPath));
+  assert.doesNotMatch(z.text("ppt/slideMasters/slideMaster1.xml"), /name="Logo"/);
+  const body = shapeSpan(contentLayout(z), "Content Placeholder 2");
+  assert.ok(Math.abs(body.bottom - (7.5 - 0.35)) < 0.001, `body ends ${body.bottom}`);
+});
+
+test("a long table continues on extra slides; slideCount counts exported slides", async () => {
+  const rows = Array.from({ length: 40 }, (_, i) => `| row ${i} | ${i} |`).join("\n");
+  const md = join(OUT, "long-table.md");
+  writeFileSync(md, `# Cover\n\n---\n\n# Big table\n\n| Name | Value |\n| --- | --- |\n${rows}\n\n<!-- notes -->\n`);
+  const result = await convert({ inputPath: md, outputPath: join(OUT, "long-table.pptx") });
+  const buffer = readFileSync(result.outputPath);
+  assert.deepEqual(await lintPackage(buffer), []);
+  assert.equal(result.slideCount, 4);
+  const z = await unzip(buffer);
+  assert.ok(z.names.includes("ppt/slides/slide4.xml"));
+  assert.match(z.text("ppt/slides/slide4.xml"), /Big table \(cont\.\)/);
+  assert.equal(z.names.filter((n) => /^ppt\/notesSlides\/notesSlide\d+\.xml$/.test(n)).length, 1);
 });
 
 test("two exports of the same deck are byte-identical", async () => {

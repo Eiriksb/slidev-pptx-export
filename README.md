@@ -26,6 +26,10 @@ Component />` tags resolved into native charts via a `chartResolvers` config.
 - **Speaker notes** from the slide's last `<!-- ... -->` comment (Slidev's convention).
 - **Native tables** styled by a deck table style, and **native charts** backed by an embedded
   Excel workbook that holds the chart's data, the way a chart built directly in PowerPoint is.
+  A table too long for its slide continues on extra slides - same title plus "(cont.)", header
+  row repeated - so the export can have more slides than the Slidev deck.
+- **Overflow warnings:** content that still doesn't fit after shrinking to 55% prints a
+  warning naming the slide, so you know which slides to split by hand.
 - **Clean files:** content types and relationships are generated from the parts actually
   written, so nothing is orphaned or missing; `npm run render` round-trips every export
   through LibreOffice as a render check, and the same input always produces a byte-identical
@@ -85,7 +89,8 @@ export default {
   // <div class="..."> that renders as the small uppercase label above a slide's title.
   eyebrowClass: "eyebrow",
 
-  // Footer logo drawn bottom-left on every slide, or omit/null for none.
+  // Footer logo drawn bottom-left on every slide, or omit/null for none. Slide bodies end
+  // 0.1in above it, so content never runs into the logo.
   logo: { path: "./assets/logo.png", aspect: 598 / 165, height: 0.27 },
 
   // Directory (relative to the input .md) chart resolvers may read data from.

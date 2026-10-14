@@ -6,6 +6,13 @@ export const defaultConfig = {
   // PowerPoint document metadata author field.
   author: "",
 
+  // Language tag written on every text run - PowerPoint uses it for spell-checking.
+  lang: "en-US",
+
+  // true writes the export time into docProps/core.xml. Off by default so exporting the same
+  // deck twice gives a byte-identical .pptx (clean diffs, reproducible builds).
+  timestamps: false,
+
   slide: {
     width: 13.333,
     height: 7.5,

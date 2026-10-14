@@ -1,15 +1,30 @@
 // Public API: convert(options) turns a Slidev markdown deck into a fully editable native
-// .pptx (real PowerPoint text boxes, tables, shapes and charts - not the screenshot-per-slide
-// export `slidev export` produces). See README.md for the config shape and bin/cli.mjs for
-// the command-line wrapper.
+// .pptx - real PowerPoint placeholders, text, tables, shapes and charts on a themed slide
+// master, not the screenshot-per-slide export `slidev export` produces. See README.md for the
+// config shape and bin/cli.mjs for the command-line wrapper.
 
 import { readFileSync, existsSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { resolve, dirname, basename, extname } from "node:path";
-import PptxGenJS from "pptxgenjs";
 import { mergeConfig } from "./config.mjs";
 import { splitSlides, parseSlide } from "./parse.mjs";
-import { renderSlide } from "./render.mjs";
-import { stripPhantomSlideMasterEntries } from "./fix-pptx.mjs";
+import { layoutDeck, deckStyle } from "./layout.mjs";
+import { writePptx } from "./ooxml/index.mjs";
+
+const LOGO_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif"]);
+
+// Footer logo drawn bottom-left on every slide (it lives on the slide master), or null when
+// none is configured or the file isn't a format PowerPoint embeds natively.
+function logoFor(config, geometry) {
+  const logo = config.logo;
+  if (!logo || !logo.path || !existsSync(logo.path)) return null;
+  if (!LOGO_EXTS.has(extname(logo.path).toLowerCase())) {
+    console.warn(`Warning: logo ${logo.path} is not PNG/JPEG/GIF - skipped.`);
+    return null;
+  }
+  const h = logo.height || 0.27;
+  return { path: logo.path, box: { x: 0.5, y: geometry.height - 0.29 - h, w: h * (logo.aspect || 1), h } };
+}
 
 /**
  * @param {object} options
@@ -40,25 +55,25 @@ export async function convert(options) {
     config.logo = { ...config.logo, path: resolve(configDir, config.logo.path) };
   }
 
-  const { slides } = splitSlides(raw);
-
-  const pptx = new PptxGenJS();
-  pptx.defineLayout({ name: "DECK", width: config.slide.width, height: config.slide.height });
-  pptx.layout = "DECK";
-  pptx.title = basename(inputPath, extname(inputPath));
-  if (config.author) pptx.author = config.author;
-  // Document-wide default font for any text run that doesn't set its own fontFace (body
-  // copy, bullets, table/stat-card text). Headings/eyebrow/code explicitly override this
-  // per-call (see config.fonts.heading/mono).
-  pptx.theme = { headFontFace: config.fonts.heading, bodyFontFace: config.fonts.body };
-
+  const { globalFrontmatter, slides } = splitSlides(raw);
   const codeStore = [];
   const parsed = slides.map((s) => ({ ...parseSlide(s.content, codeStore, config), frontmatter: s.frontmatter }));
-  parsed.forEach((slideData, i) => renderSlide(pptx, slideData, i, codeStore, config));
+  const specs = layoutDeck(parsed, codeStore, config);
+  const style = deckStyle(config);
+
+  const buffer = await writePptx(specs, {
+    geometry: style.geometry,
+    theme: style.theme,
+    fonts: config.fonts,
+    lang: config.lang,
+    title: globalFrontmatter.title || basename(inputPath, extname(inputPath)),
+    author: config.author,
+    timestamps: config.timestamps === true,
+    logo: logoFor(config, style.geometry),
+  });
 
   const outputPath = resolve(options.outputPath || `${basename(inputPath, extname(inputPath))}-editable.pptx`);
-  await pptx.writeFile({ fileName: outputPath });
-  await stripPhantomSlideMasterEntries(outputPath);
+  await writeFile(outputPath, buffer);
 
   const chartBlocks = parsed.flatMap((s) => s.blocks).filter((b) => b.type === "chart");
   const translatedCharts = chartBlocks.filter((b) => b.resolved).length;

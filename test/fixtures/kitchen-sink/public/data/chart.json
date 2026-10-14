@@ -1,0 +1,9 @@
+{
+  "labels": ["Q1", "Q2", "Q3", "Q4"],
+  "datasets": [
+    { "name": "Before", "color": "9CA3AF", "data": [22, 31, 28, 35] },
+    { "name": "After", "color": "1A833B", "data": [41, 56, 63, 72] }
+  ],
+  "min": 0,
+  "max": 100
+}

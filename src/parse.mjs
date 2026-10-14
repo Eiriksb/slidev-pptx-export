@@ -1,4 +1,4 @@
-// Markdown -> { globalFrontmatter, slides: [{ eyebrow, title, blocks }] } parsing. Generic
+// Markdown -> { globalFrontmatter, slides: [{ eyebrow, title, blocks, notes }] } parsing. Generic
 // across any Slidev deck: nothing here is specific to one deck's colors/fonts/components -
 // those come in through `config` (see config.mjs) and are only used for cosmetic decisions
 // (which CSS var maps to which color, which component tag resolves to which chart data).
@@ -10,7 +10,7 @@ const CODE_TOKEN_RE = /^@@CODEBLOCK_(\d+)@@$/;
 // Tailwind/UnoCSS text-size utility classes big enough to mean "this div IS a headline
 // number" (the "text-2xl font-bold" stat pattern common in card grids, e.g. "40%" / "Tid")
 // rather than ordinary body copy - text-sm/base/lg stay as normal paragraphs so their inline
-// **bold**/`code` markdown formatting still goes through mdInlineToRuns.
+// **bold**/`code` markdown formatting still goes through mdInlineTokens.
 const BIG_TEXT_SIZE_PT = { "text-6xl": 40, "text-5xl": 34, "text-4xl": 28, "text-3xl": 24, "text-2xl": 20 };
 
 // Matches both digit ("grid-cols-3") and arbitrary-value ("grid-cols-[minmax(0,1fr)_2fr]")
@@ -151,17 +151,6 @@ export function mdInlineTokens(text) {
   if (last < text.length) tokens.push({ text: text.slice(last) });
   if (tokens.length === 0) tokens.push({ text });
   return tokens;
-}
-
-// pptxgenjs-shaped runs for the legacy renderer (render.mjs); removed together with it.
-function mdInlineToRuns(text, baseOpts, config) {
-  const base = { fontFace: config.fonts.body, ...baseOpts };
-  return mdInlineTokens(text).map((t) => {
-    if (t.bold) return { text: t.text, options: { ...base, bold: true, color: config.colors.accentDark } };
-    if (t.code) return { text: t.text, options: { ...base, fontFace: config.fonts.mono, color: config.colors.accentDark } };
-    if (t.italic) return { text: t.text, options: { ...base, italic: true } };
-    return { text: t.text, options: { ...base } };
-  });
 }
 
 function parseTable(text) {
@@ -420,5 +409,3 @@ export function parseSlide(content, codeStore, config) {
   const blocks = flattenContent(text, config);
   return { eyebrow, title, blocks, notes };
 }
-
-export { mdInlineToRuns };

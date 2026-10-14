@@ -36,8 +36,7 @@
   "dependencies": {
     "image-size": "^2.0.4",
     "js-yaml": "^4.1.0",
-    "jszip": "^3.10.1",
-    "pptxgenjs": "^4.0.1"
+    "jszip": "^3.10.1"
   },
   "devDependencies": {
     "@xmldom/xmldom": "^0.9.12"

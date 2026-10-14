@@ -10,6 +10,25 @@ authoring patterns: frontmatter-separated slides, Tailwind/UnoCSS grid layouts (
 grid-cols-N` -> a row of cards), `text-2xl`+ stat numbers, `opacity-NN` fades, and `<Vue
 Component />` tags resolved into native charts via a `chartResolvers` config.
 
+## What you get in PowerPoint
+
+- **Real layouts and placeholders.** Slide titles sit in the layout's title placeholder, so
+  outline view, the Accessibility Checker, Reset Slide and layout switching work. Text-only
+  slides (paragraphs, bullets, sub-headings) put their body in the content placeholder, with
+  native bullets and numbering and "shrink text on overflow". Slides with cards, tables, code,
+  charts or images use the *Title Only* layout plus positioned shapes.
+- **A theme built from your config.** `colors` and `fonts` become the deck's theme colors and
+  heading/body fonts, so *Design ▸ Variants* recolors or re-fonts the whole deck.
+- **Slidev layouts mapped:** first slide / `cover` / `intro` → *Title Slide*, `center` / `end`
+  → *Centered*, `section` → *Section Header*, everything else → *Title and Content* or *Title
+  Only*.
+- **Speaker notes** from the slide's last `<!-- ... -->` comment (Slidev's convention).
+- **Native tables** styled by a deck table style, and **native charts** with an embedded
+  workbook (*Edit Data* works).
+- **Clean files:** content types and relationships are generated from the parts actually
+  written (no repair prompts in PowerPoint Online), and the same input always produces a
+  byte-identical `.pptx`.
+
 ## Usage
 
 ```bash
@@ -54,6 +73,9 @@ export default {
 
   fonts: { heading: "Arial", body: "Arial", mono: "Courier New" },
 
+  lang: "en-US",     // language tag on every text run (spell-check)
+  timestamps: false, // true = write the export time into the file (breaks byte-identical output)
+
   // Inline style="color: var(--x)" -> one of the color keys above, for decks that color
   // text via CSS variables rather than Tailwind classes.
   cssVarColors: { "--brand-blue": "accent2" },
@@ -81,6 +103,13 @@ export default {
 
 A component tag with no matching resolver (or whose resolver throws / returns `null`)
 renders as a labeled placeholder box instead of failing the whole export.
+
+## Development
+
+```bash
+npm test         # unit tests, package lint, kitchen-sink fixture export
+npm run render   # LibreOffice render of the fixture (and ../innotek-SlideDevBase if present) to out/render/
+```
 
 ## What it doesn't do
 

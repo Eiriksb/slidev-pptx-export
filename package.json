@@ -34,6 +34,7 @@
     "render": "node scripts/render.mjs"
   },
   "dependencies": {
+    "image-size": "^2.0.4",
     "js-yaml": "^4.1.0",
     "jszip": "^3.10.1",
     "pptxgenjs": "^4.0.1"

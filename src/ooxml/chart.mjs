@@ -39,7 +39,13 @@ export function chartXml(spec, { lang, workbookRId }) {
   const series = spec.series
     .map((s, j) => {
       const col = colName(j + 1);
-      const pts = s.values.map((v, i) => (Number.isFinite(v) ? `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>` : "")).join("");
+      // A series longer than the category list would write c:pt idx values >= ptCount (n) -
+      // schema-invalid and fatal to LibreOffice. A shorter series is fine; missing points
+      // just mean a gap.
+      const pts = s.values
+        .slice(0, n)
+        .map((v, i) => (Number.isFinite(v) ? `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>` : ""))
+        .join("");
       return (
         `<c:ser><c:idx val="${j}"/><c:order val="${j}"/>` +
         `<c:tx><c:strRef><c:f>Sheet1!$${col}$1</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>${esc(s.name)}</c:v></c:pt></c:strCache></c:strRef></c:tx>` +
@@ -51,9 +57,11 @@ export function chartXml(spec, { lang, workbookRId }) {
     })
     .join("");
 
+  // Number.isFinite (not != null) so Math.max()/Math.min() of an empty array (+/-Infinity) or
+  // a NaN never gets written as an invalid xs:double; 0 is finite and still written.
   const scaling =
     '<c:scaling><c:orientation val="minMax"/>' +
-    `${spec.max != null ? `<c:max val="${spec.max}"/>` : ""}${spec.min != null ? `<c:min val="${spec.min}"/>` : ""}</c:scaling>`;
+    `${Number.isFinite(spec.max) ? `<c:max val="${spec.max}"/>` : ""}${Number.isFinite(spec.min) ? `<c:min val="${spec.min}"/>` : ""}</c:scaling>`;
   const ticks = '<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/>';
   const catAx =
     `<c:catAx><c:axId val="${CAT_AX}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/>` +

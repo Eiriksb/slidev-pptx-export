@@ -21,6 +21,9 @@
   ],
   "license": "MIT",
   "author": "Eirik B.",
+  "engines": {
+    "node": ">=18"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Eiriksb/slidev-pptx-export.git"

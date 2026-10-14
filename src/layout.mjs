@@ -30,6 +30,8 @@ export function deckStyle(config) {
       accent2: slot("accent2"), muted: slot("muted"), border: slot("border"),
     },
     hex: (h) => toColor(h, theme),
+    // Bad resolver colors warn once per value (see resolverColor below), not once per use.
+    warnedColors: new Set(),
   };
 }
 
@@ -131,7 +133,12 @@ function blockParas(blocks, size, S, align) {
     if (block.type === "paragraph") {
       paras.push({ bullet: "none", align, runs: runsFor(block.text) });
     } else if (block.type === "bullets") {
-      for (const item of block.items) paras.push({ bullet: block.ordered ? "number" : "char", align, runs: runsFor(item) });
+      block.items.forEach((item, i) => {
+        const para = { bullet: block.ordered ? "number" : "char", align, runs: runsFor(item) };
+        // Only the first item needs an explicit start; PowerPoint auto-increments the rest.
+        if (i === 0 && block.start) para.number = block.start;
+        paras.push(para);
+      });
     } else if (block.type === "heading") {
       // Only the slide title uses the heading font - a ##/### inside the body is bold body text.
       const hs = (size || BODY_PT) + (block.level === 2 ? 5 : 2);
@@ -204,6 +211,23 @@ function label(text, box, size, { align, anchor = "ctr", ...run } = {}) {
   return { kind: "text", ...box, geometry: "rect", anchor, paras: [{ align, runs: [{ text: String(text), font: "body", size, ...run }] }] };
 }
 
+// Chart resolvers are user code and may return a malformed color (e.g. a CSS name like
+// "green" instead of a hex string) - normalizeHex throwing shouldn't abort the whole export.
+// Falls back to `fallback` and warns once per bad value instead. Config-supplied colors
+// (deck.colors.*) are not resolver output and keep failing loudly via themeColors/toColor.
+function resolverColor(S, value, fallback) {
+  if (!value) return fallback;
+  try {
+    return S.hex(value);
+  } catch (err) {
+    if (!S.warnedColors.has(value)) {
+      S.warnedColors.add(value);
+      console.warn(`Warning: ignoring invalid chart resolver color ${JSON.stringify(value)} (${err.message}) - using the default instead.`);
+    }
+    return fallback;
+  }
+}
+
 // statcards: a row of panel cards, each either a small grid of "big number + label" stat
 // pairs, or one large centered percentage (+ subtitle).
 function statCardShapes(cards, { x, y, w, h }, baseTextSize, S) {
@@ -217,12 +241,12 @@ function statCardShapes(cards, { x, y, w, h }, baseTextSize, S) {
     let cy = y + 0.18;
     if (card.title) {
       const dot = 0.1;
-      shapes.push({ kind: "text", x: cx + 0.18, y: cy + 0.03, w: dot, h: dot, geometry: "ellipse", fill: card.accent ? S.hex(card.accent) : color.accent, paras: [] });
+      shapes.push({ kind: "text", x: cx + 0.18, y: cy + 0.03, w: dot, h: dot, geometry: "ellipse", fill: resolverColor(S, card.accent, color.accent), paras: [] });
       shapes.push(label(card.title, { x: cx + 0.18 + dot + 0.09, y: cy - 0.04, w: cardW - 0.36 - dot - 0.09, h: 0.3 }, Math.max(9, baseTextSize - 1), { b: true, color: color.text }));
       cy += 0.42;
     }
     if (card.big) {
-      shapes.push(label(card.big.value, { x: cx, y: cy, w: cardW, h: 0.85 }, 38, { align: "ctr", anchor: "t", b: true, color: card.big.color ? S.hex(card.big.color) : color.text }));
+      shapes.push(label(card.big.value, { x: cx, y: cy, w: cardW, h: 0.85 }, 38, { align: "ctr", anchor: "t", b: true, color: resolverColor(S, card.big.color, color.text) }));
       cy += 0.85;
       if (card.big.label) {
         shapes.push(label(card.big.label, { x: cx + 0.18, y: cy, w: cardW - 0.36, h: 0.4 }, Math.max(9, baseTextSize - 1), { align: "ctr", color: color.muted }));
@@ -238,7 +262,7 @@ function statCardShapes(cards, { x, y, w, h }, baseTextSize, S) {
       card.stats.forEach((s, si) => {
         const sx = cx + 0.18 + (si % cols) * statW;
         const sy = cy + Math.floor(si / cols) * 0.66;
-        shapes.push(label(s.value, { x: sx, y: sy, w: statW, h: 0.34 }, 19, { b: true, color: s.color ? S.hex(s.color) : color.text }));
+        shapes.push(label(s.value, { x: sx, y: sy, w: statW, h: 0.34 }, 19, { b: true, color: resolverColor(S, s.color, color.text) }));
         shapes.push(label(s.label, { x: sx, y: sy + 0.32, w: statW, h: 0.3 }, Math.max(8, baseTextSize - 3), { color: color.muted }));
       });
     }
@@ -257,7 +281,7 @@ function barPanelShapes(resolved, { x, y, w, h }, S) {
   const panelW = (w - gap * (resolved.panels.length - 1)) / resolved.panels.length;
   resolved.panels.forEach((panel, i) => {
     const px = x + i * (panelW + gap);
-    const pc = panel.color ? S.hex(panel.color) : PALETTE[i % PALETTE.length];
+    const pc = resolverColor(S, panel.color, PALETTE[i % PALETTE.length]);
     const dot = 0.1;
     shapes.push({ kind: "text", x: px, y, w: panelW, h, geometry: "roundRect", radius: 0.1, fill: color.panel, shadow: true, paras: [] });
     shapes.push({ kind: "text", x: px + 0.18, y: y + 0.16, w: dot, h: dot, geometry: "ellipse", fill: pc, paras: [] });
@@ -288,7 +312,7 @@ function groupedBarShape(resolved, box, S) {
     kind: "chart", ...box,
     chart: {
       type: "column", categories: resolved.labels.map(String),
-      series: resolved.datasets.map((d, j) => ({ name: String(d.name), color: d.color ? S.hex(d.color) : PALETTE[j % PALETTE.length], values: d.data.map(Number) })),
+      series: resolved.datasets.map((d, j) => ({ name: String(d.name), color: resolverColor(S, d.color, PALETTE[j % PALETTE.length]), values: d.data.map(Number) })),
       min: resolved.min, max: resolved.max, valueAxis: true, legend: true, gapWidth: 45, overlap: -6,
       dataLabels: { color: color.text, size: 10 }, background: "lt1",
       catLabelColor: color.text, catLabelSize: 11, valLabelColor: color.muted, valLabelSize: 9, legendColor: color.text, legendSize: 11,
@@ -333,8 +357,13 @@ function blockShapes(block, x, y, w, textSize, codeStore, scale, S) {
       break;
     }
     case "table":
-      // Header bold/color comes from the deck table style, so cells only carry size + inline markdown.
-      shapes = [{ kind: "table", ...box, header: true, variant: "default", rows: block.rows.map((row) => row.map((c) => [{ runs: inlineRuns(c, { font: "body", size: textSize }, S) }])) }];
+      // Header color comes from the deck table style, but an app that ignores custom table
+      // styles would render the header row the same as the rest - so the header's own runs
+      // also carry b:true directly.
+      shapes = [{
+        kind: "table", ...box, header: true, variant: "default",
+        rows: block.rows.map((row, ri) => row.map((c) => [{ runs: inlineRuns(c, ri === 0 ? { font: "body", size: textSize, b: true } : { font: "body", size: textSize }, S) }])),
+      }];
       break;
     case "deflist":
       // A compact 2-column reference table (term | description) instead of stacked paragraphs.
@@ -477,7 +506,11 @@ function layoutSlide(slide, index, codeStore, S) {
     spec.layout = "section";
     spec.placeholders.title = title;
     if (slide.eyebrow) spec.shapes.push(eyebrowShape(slide.eyebrow, { ...g.eyebrow, y: g.sectionTitle.y - 0.35 }, align, S));
-    if (textOnly) spec.placeholders.body = blockParas(blocks, null, S, align);
+    if (textOnly) {
+      spec.placeholders.body = blockParas(blocks, null, S, align);
+      const needed = blocksHeight(blocks, g.sectionBody.w, BODY_PT, codeStore);
+      if (needed > g.sectionBody.h) spec.placeholders.bodyFontScale = shrinkScale(g.sectionBody.h, needed);
+    }
     return spec;
   }
 

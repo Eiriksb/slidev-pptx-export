@@ -73,7 +73,7 @@ export function splitSlides(raw) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Parse one slide's content into { eyebrow, title, blocks[] }
+// 2. Parse one slide's content into { eyebrow, title, blocks[], notes }
 // ---------------------------------------------------------------------------
 
 function findBalancedDiv(str, openTagStart) {
@@ -227,7 +227,10 @@ function processPlainText(rawText, blocks) {
     const flushBuffer = () => {
       if (buffer.length === 0) return;
       if (bufferType === "list") {
-        blocks.push({ type: "bullets", ordered: bufferOrdered, items: buffer.map((l) => l.replace(LIST_MARKER_RE, "")) });
+        // Carry the list's own start number (e.g. "3. / 4." -> start 3) through to layout.mjs,
+        // so a list that doesn't start at 1 keeps its numbering in the export.
+        const start = bufferOrdered ? Number(/^(\d+)\./.exec(buffer[0])[1]) : undefined;
+        blocks.push({ type: "bullets", ordered: bufferOrdered, start, items: buffer.map((l) => l.replace(LIST_MARKER_RE, "")) });
       } else {
         blocks.push({ type: "paragraph", text: buffer.join(" ") });
       }
@@ -374,6 +377,25 @@ function flattenContent(str, config) {
 export function parseSlide(content, codeStore, config) {
   let text = content;
 
+  // pull out fenced code blocks so blank-line splitting doesn't break them, and so a comment
+  // inside a fence is never mistaken for speaker notes below.
+  text = text.replace(/```[^\n]*\n([\s\S]*?)```/g, (_, code) => {
+    const idx = codeStore.length;
+    codeStore.push(code.replace(/\n$/, ""));
+    return `\n\n@@CODEBLOCK_${idx}@@\n\n`;
+  });
+
+  // Speaker notes: Slidev treats the slide's last HTML comment as its notes when nothing but
+  // whitespace follows it. The capture can't contain "<!--", so an earlier comment never
+  // swallows the real one. Runs before eyebrow/title extraction so a "# heading" written
+  // inside the notes is never mistaken for the slide's own title.
+  let notes = null;
+  const notesMatch = /<!--((?:(?!<!--)[\s\S])*?)-->\s*$/.exec(text);
+  if (notesMatch) {
+    notes = notesMatch[1].trim() || null;
+    text = text.slice(0, notesMatch.index);
+  }
+
   // eyebrow label
   let eyebrow = null;
   const eyebrowRe = new RegExp(`<div class="${escapeRegExp(config.eyebrowClass)}">([\\s\\S]*?)</div>`);
@@ -388,23 +410,6 @@ export function parseSlide(content, codeStore, config) {
     title = t.trim();
     return "";
   });
-
-  // pull out fenced code blocks so blank-line splitting doesn't break them
-  text = text.replace(/```[^\n]*\n([\s\S]*?)```/g, (_, code) => {
-    const idx = codeStore.length;
-    codeStore.push(code.replace(/\n$/, ""));
-    return `\n\n@@CODEBLOCK_${idx}@@\n\n`;
-  });
-
-  // Speaker notes: Slidev treats the slide's last HTML comment as its notes when nothing but
-  // whitespace follows it. The capture can't contain "<!--", so an earlier comment never
-  // swallows the real one. Runs after code fences are tokenized so comments in code are kept.
-  let notes = null;
-  const notesMatch = /<!--((?:(?!<!--)[\s\S])*?)-->\s*$/.exec(text);
-  if (notesMatch) {
-    notes = notesMatch[1].trim() || null;
-    text = text.slice(0, notesMatch.index);
-  }
 
   const blocks = flattenContent(text, config);
   return { eyebrow, title, blocks, notes };

@@ -17,17 +17,19 @@ Component />` tags resolved into native charts via a `chartResolvers` config.
   slides (paragraphs, bullets, sub-headings) put their body in the content placeholder, with
   native bullets and numbering and "shrink text on overflow". Slides with cards, tables, code,
   charts or images use the *Title Only* layout plus positioned shapes.
-- **A theme built from your config.** `colors` and `fonts` become the deck's theme colors and
-  heading/body fonts, so *Design ▸ Variants* recolors or re-fonts the whole deck.
+- **A theme built from your config.** `colors` and `fonts` become real theme colors and
+  heading/body fonts in `theme1.xml`, and the slide master and layouts reference them the way
+  a hand-built PowerPoint template would.
 - **Slidev layouts mapped:** first slide / `cover` / `intro` → *Title Slide*, `center` / `end`
   → *Centered*, `section` → *Section Header*, everything else → *Title and Content* or *Title
   Only*.
 - **Speaker notes** from the slide's last `<!-- ... -->` comment (Slidev's convention).
-- **Native tables** styled by a deck table style, and **native charts** with an embedded
-  workbook (*Edit Data* works).
+- **Native tables** styled by a deck table style, and **native charts** backed by an embedded
+  Excel workbook that holds the chart's data, the way a chart built directly in PowerPoint is.
 - **Clean files:** content types and relationships are generated from the parts actually
-  written (no repair prompts in PowerPoint Online), and the same input always produces a
-  byte-identical `.pptx`.
+  written, so nothing is orphaned or missing; `npm run render` round-trips every export
+  through LibreOffice as a render check, and the same input always produces a byte-identical
+  `.pptx`.
 
 ## Usage
 
@@ -116,3 +118,8 @@ npm run render   # LibreOffice render of the fixture (and ../innotek-SlideDevBas
 This is a markdown -> pptx layout engine tuned for the patterns Slidev decks commonly use,
 not a full HTML/CSS renderer. Arbitrary nested HTML, custom Vue components without a
 resolver, and complex CSS layouts fall back to a flattened, best-effort text rendering.
+
+Only PNG/JPEG/GIF images and logos embed natively; an SVG image exports as a labeled
+placeholder and an SVG logo is skipped. A `layout: section` slide whose body is more than
+plain text/bullets (a table, chart or card row) uses the *Title Only* layout instead of
+*Section Header*, since that content doesn't fit the section body placeholder.

@@ -47,6 +47,12 @@ test("text-only body goes into the content placeholder with native bullets", () 
   assert.deepEqual(eyebrow.paras[0].runs[0], { text: "INTRO", font: "heading", size: 9, b: true, color: "accent1", spacing: 1.5 });
 });
 
+test("F5: an ordered list starting above 1 carries startAt on only its first paragraph", () => {
+  const [, s] = specsFor(`${COVER}---\n\n# Numbered\n\n3. third\n4. fourth\n`);
+  assert.equal(s.placeholders.body[0].number, 3);
+  assert.equal(s.placeholders.body[1].number, undefined);
+});
+
 test("an overflowing text-only body gets a shrink-on-overflow font scale", () => {
   const bullets = Array.from({ length: 40 }, (_, i) => `- bullet number ${i}`).join("\n");
   const [, s] = specsFor(`${COVER}---\n\n# Dense\n\n${bullets}\n`);
@@ -63,6 +69,14 @@ test("a rich body uses Title Only plus positioned shapes", () => {
   assert.equal(table.y, 1.6);
 });
 
+test("F2: table header-row runs carry b:true so the header stays bold even without the table style", () => {
+  const [, s] = specsFor(`${COVER}---\n\n# Table\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n`);
+  const table = s.shapes.find((x) => x.kind === "table");
+  assert.equal(table.rows[0][0][0].runs[0].b, true);
+  assert.equal(table.rows[0][1][0].runs[0].b, true);
+  assert.equal(table.rows[1][0][0].runs[0].b, undefined);
+});
+
 test("layout: center with text-center centers the stack and the text", () => {
   const [, s] = specsFor(`${COVER}---\nlayout: center\nclass: text-center\n---\n\n# Thanks\n\nQuestions?\n`);
   assert.equal(s.layout, "centered");
@@ -76,6 +90,14 @@ test("layout: section maps to Section Header", () => {
   const [, s] = specsFor(`${COVER}---\nlayout: section\n---\n\n# Part two\n\nWhat comes next\n`);
   assert.equal(s.layout, "section");
   assert.deepEqual(texts(s.placeholders.body), ["What comes next"]);
+  assert.equal(s.placeholders.bodyFontScale, undefined);
+});
+
+test("F4: an overflowing section body gets a shrink-on-overflow font scale too", () => {
+  const bullets = Array.from({ length: 10 }, (_, i) => `- bullet number ${i}`).join("\n");
+  const [, s] = specsFor(`${COVER}---\nlayout: section\n---\n\n# Part two\n\n${bullets}\n`);
+  assert.equal(s.layout, "section");
+  assert.ok(s.placeholders.bodyFontScale >= 0.55 && s.placeholders.bodyFontScale < 1, String(s.placeholders.bodyFontScale));
 });
 
 test("a slide without a title is Blank with everything as shapes", () => {
@@ -92,6 +114,26 @@ test("charts: resolver colors map to theme slots, unresolved tags become placeho
   assert.deepEqual(chart.series.map((x) => x.color), ["accent1", "accent2"]);
   const missing = s.shapes.find((x) => x.kind === "text" && x.line && x.line.dash === "dash");
   assert.match(missing.paras[0].runs[0].text, /Missing — interactive chart, no data directory configured/);
+});
+
+test("F6: a malformed resolver color falls back to the palette instead of throwing, and warns once", () => {
+  const warnings = [];
+  const orig = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    const C = () => ({
+      kind: "barchart", labels: ["a", "b"],
+      datasets: [{ name: "x", color: "green", data: [1, 2] }, { name: "y", color: "green", data: [3, 4] }],
+      min: 0, max: 10,
+    });
+    const [, s] = specsFor(`${COVER}---\n\n# Charts\n\n<C />\n`, { chartResolvers: { C } });
+    const chart = s.shapes.find((x) => x.kind === "chart").chart;
+    assert.deepEqual(chart.series.map((x) => x.color), ["accent1", "accent2"]);
+    assert.equal(warnings.length, 1, warnings.join("\n"));
+    assert.match(warnings[0], /green/);
+  } finally {
+    console.warn = orig;
+  }
 });
 
 test("images are contain-fitted with alt text; missing ones become placeholders", () => {

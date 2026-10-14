@@ -52,6 +52,43 @@ test("chart XML: two axes, caches, formulas, colors, hidden value axis option", 
   assert.doesNotMatch(bar, /<c:legend>/);
 });
 
+test("F1: series values beyond the category count are clamped to ptCount, not written past it", async () => {
+  const spec = { ...SPEC, categories: ["Q1", "Q2"], series: [{ name: "Before", color: "accent5", values: [22, 31, 28, 99] }] };
+  const xml = chartXml(spec, { lang: "en-US", workbookRId: "rId1" });
+  parseXml(xml); // well-formed
+  // ptCount matches the category count, and no c:pt idx reaches or exceeds it.
+  assert.match(xml, /<c:numCache><c:formatCode>General<\/c:formatCode><c:ptCount val="2"\/><c:pt idx="0"><c:v>22<\/c:v><\/c:pt><c:pt idx="1"><c:v>31<\/c:v><\/c:pt><\/c:numCache>/);
+  assert.doesNotMatch(xml, /idx="2"><c:v>28/);
+  assert.doesNotMatch(xml, /idx="3"/);
+
+  // The embedded workbook is built from the same spec, indexed by category - it never reads
+  // (and so never writes) the out-of-range values either, keeping the sheet and the caches in
+  // agreement.
+  const book = await unzip(await chartWorkbook(spec));
+  assert.doesNotMatch(book.text("xl/worksheets/sheet1.xml"), /99/);
+  assert.match(book.text("xl/worksheets/sheet1.xml"), /<dimension ref="A1:B3"\/>/);
+
+  const buffer = await writePptx([{ layout: "blank", shapes: [{ kind: "chart", x: 1, y: 1, w: 4, h: 3, chart: spec }] }], DECK);
+  assert.deepEqual(await lintPackage(buffer), []);
+});
+
+test("F1: non-finite min/max (e.g. Math.max() of an empty array) are omitted, not written as xs:double garbage", () => {
+  const spec = { ...SPEC, min: Math.min(), max: Math.max() }; // Infinity / -Infinity
+  const xml = chartXml(spec, { lang: "en-US", workbookRId: "rId1" });
+  assert.doesNotMatch(xml, /<c:min /);
+  assert.doesNotMatch(xml, /<c:max /);
+  assert.doesNotMatch(xml, /Infinity/);
+
+  const nanXml = chartXml({ ...SPEC, min: NaN, max: NaN }, { lang: "en-US", workbookRId: "rId1" });
+  assert.doesNotMatch(nanXml, /<c:min /);
+  assert.doesNotMatch(nanXml, /<c:max /);
+  assert.doesNotMatch(nanXml, /NaN/);
+
+  // 0 is finite and must still be written (not treated as falsy/missing).
+  const zeroXml = chartXml({ ...SPEC, min: 0, max: 10 }, { lang: "en-US", workbookRId: "rId1" });
+  assert.match(zeroXml, /<c:min val="0"\/>/);
+});
+
 test("writer adds chart part + embedded workbook and passes lint", async () => {
   const shape = { kind: "chart", x: 1, y: 2, w: 6, h: 3, chart: SPEC };
   const buffer = await writePptx([{ layout: "blank", shapes: [shape, { ...shape, x: 7 }] }], DECK);

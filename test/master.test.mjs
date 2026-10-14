@@ -47,6 +47,14 @@ test("cover title style lives in the layout's lstStyle", () => {
   assert.match(xml, /<a:lstStyle><a:lvl1pPr algn="ctr"><a:defRPr sz="4000" b="1"><a:solidFill><a:schemeClr val="accent2"\/><\/a:solidFill><\/a:defRPr><\/a:lvl1pPr><\/a:lstStyle>/);
 });
 
+test("F3: section body lstStyle no longer sets buNone, so char bullets inherit a real bullet", () => {
+  const def = layoutDefs(g).find((d) => d.key === "section");
+  const xml = layoutXml(def, ctx);
+  const bodyDef = def.placeholders.find((p) => p.role === "body");
+  assert.doesNotMatch(bodyDef.lstStyle, /buNone/);
+  assert.match(xml, /<a:lstStyle><a:lvl1pPr><a:defRPr sz="1600"><a:solidFill><a:schemeClr val="accent3"\/><\/a:solidFill><\/a:defRPr><\/a:lvl1pPr><\/a:lstStyle>/);
+});
+
 test("master: clrMap, layout id list, txStyles with theme fonts and accent bullets, logo", () => {
   const xml = masterXml({ geometry: g, ctx, layoutIds: [{ id: 2147483649, rId: "rId2" }], logo: { rId: "rId9", box: { x: 0.5, y: 6.94, w: 0.98, h: 0.27 } } });
   parseXml(xml);

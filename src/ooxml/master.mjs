@@ -35,8 +35,10 @@ export function layoutDefs(g) {
       key: "section", name: "Section Header", type: "secHead",
       placeholders: [
         { ...title, box: g.sectionTitle, lstStyle: lvl1({ sz: 34, b: true }) },
+        // No buNone here (unlike the title-slide subtitle below): a section body's bullet/
+        // numbered lists need to inherit the master's real bullet, not render as plain lines.
         { role: "body", ph: { type: "body", idx: 1 }, name: "Text Placeholder 2", box: g.sectionBody, anchor: "t", prompt: BODY_PROMPT,
-          lstStyle: lvl1({ sz: 16, color: "accent3", buNone: true }) },
+          lstStyle: lvl1({ sz: 16, color: "accent3" }) },
       ],
     },
     {

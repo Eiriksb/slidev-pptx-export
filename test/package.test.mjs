@@ -52,6 +52,12 @@ test("toBuffer refuses a relationship to a missing part", async () => {
   await assert.rejects(pkg.toBuffer(), /missing part \/ppt\/slides\/slide2.xml/);
 });
 
+test("F9: toBuffer refuses a relationship whose source part was never added", async () => {
+  const pkg = samplePackage();
+  pkg.rel("/ppt/slides/slide2.xml", "/ppt/slides/slide1.xml", REL.slide); // source part never added
+  await assert.rejects(pkg.toBuffer(), /\/ppt\/slides\/slide2.xml.*never added/);
+});
+
 test("duplicate parts and unknown media types are rejected", () => {
   const pkg = samplePackage();
   assert.throws(() => pkg.addXml("/ppt/slides/slide1.xml", CT.slide, "<s/>"), /Duplicate part/);

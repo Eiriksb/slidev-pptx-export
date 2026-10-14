@@ -14,6 +14,13 @@ function sourceOfRels(relsName) {
   return m ? `${m[1]}${m[2]}` : null;
 }
 
+function directChild(parent, localName) {
+  for (let c = parent.firstChild; c; c = c.nextSibling) {
+    if (c.nodeType === 1 && c.localName === localName) return c;
+  }
+  return null;
+}
+
 function resolveTarget(sourcePart, target) {
   if (target.startsWith("/")) return target.slice(1);
   const parts = sourcePart.split("/").slice(0, -1);
@@ -111,6 +118,12 @@ export async function lintPackage(buffer, label = "") {
       if (el.localName === "barChart") {
         const axIds = [...elements(el)].filter((k) => k.parentNode === el && k.localName === "axId").length;
         if (axIds !== 2) report(`${n}: barChart has ${axIds} c:axId (expected 2)`);
+      }
+      if (el.localName === "pt" && (el.parentNode.localName === "numCache" || el.parentNode.localName === "strCache")) {
+        const ptCountEl = directChild(el.parentNode, "ptCount");
+        const ptCount = ptCountEl ? Number(ptCountEl.getAttribute("val")) : NaN;
+        const idx = Number(el.getAttribute("idx"));
+        if (!(idx < ptCount)) report(`${n}: c:pt idx=${idx} >= ptCount ${ptCount}`);
       }
       if (el.localName === "sldId") {
         const id = Number(el.getAttribute("id"));

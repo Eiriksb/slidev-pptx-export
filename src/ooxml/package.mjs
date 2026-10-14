@@ -149,6 +149,12 @@ export class Package {
 
   async toBuffer() {
     for (const [source, list] of this.rels) {
+      // A rels source that was never added via addXml/addMedia would otherwise be silently
+      // dropped below (the part loop only visits parts that exist) instead of writing the
+      // .rels file a relationship to it needs.
+      if (source !== "" && !this.parts.has(source)) {
+        throw new Error(`Relationships source part ${source} was never added`);
+      }
       for (const r of list) {
         if (!r.external && !this.parts.has(r.target)) {
           throw new Error(`Relationship ${r.id} from ${source || "/"} points at missing part ${r.target}`);

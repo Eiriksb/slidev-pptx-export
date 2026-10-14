@@ -61,6 +61,20 @@ test("flags an Override for a part that is missing (pptxgenjs#1449)", async () =
   assert.ok(problems.some((p) => /Override for missing part \/ppt\/slideMasters\/slideMaster2.xml/.test(p)), problems.join("\n"));
 });
 
+test("F1: flags a c:pt idx that reaches or exceeds its cache's ptCount", async () => {
+  const problems = await lintSlide("", (pkg) =>
+    pkg.addXml(
+      "/ppt/charts/chart1.xml",
+      CT.chart,
+      '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">' +
+        '<c:chart><c:plotArea><c:barChart><c:ser><c:val><c:numRef><c:numCache><c:ptCount val="2"/>' +
+        '<c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="2"><c:v>2</c:v></c:pt></c:numCache></c:numRef></c:val>' +
+        "</c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"
+    )
+  );
+  assert.ok(problems.some((p) => /c:pt idx=2 >= ptCount 2/.test(p)), problems.join("\n"));
+});
+
 test("flags duplicate slide ids", async () => {
   const pkg = new Package();
   pkg.addXml("/ppt/presentation.xml", CT.presentation, '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldIdLst><p:sldId id="256"/><p:sldId id="256"/></p:sldIdLst></p:presentation>');

@@ -125,7 +125,7 @@ export async function writePptx(slides, deck) {
       const paras = ph[p.role];
       if (!paras || !paras.length) continue;
       const box = p.role === "title" ? ph.titleBox : p.role === "body" ? ph.bodyBox : undefined;
-      const body = p.role === "body" && ph.bodyFontScale ? { fontScale: ph.bodyFontScale } : {};
+      const body = p.role === "body" && ph.bodyFontScale ? { fontScale: ph.bodyFontScale } : p.role === "title" && ph.titleBody ? ph.titleBody : {};
       xml += placeholderXml({ id: nextId++, name: p.name, ph: p.ph, box, paras, ctx: sctx, body });
     }
     for (const shape of spec.shapes || []) xml += await shapeToXml(shape, nextId++, env);

@@ -114,3 +114,8 @@ test("unknown layouts and shape kinds are rejected", async () => {
   await assert.rejects(writePptx([{ layout: "nope" }], DECK), /unknown layout "nope"/);
   await assert.rejects(writePptx([{ layout: "blank", shapes: [{ kind: "video" }] }], DECK), /Unknown shape kind "video"/);
 });
+
+test("a slide's title placeholder can carry its own body properties", async () => {
+  const buffer = await writePptx([{ layout: "titleOnly", placeholders: { title: t("Measured"), titleBox: { x: 1, y: 1, w: 3, h: 0.5 }, titleBody: { wrap: false, inset: 0, anchor: "t" } }, shapes: [] }], DECK);
+  assert.match((await unzip(buffer)).text("ppt/slides/slide1.xml"), /<p:ph type="title"\/>[\s\S]*?<a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="t"\/>/);
+});

@@ -55,3 +55,8 @@ test("slideXml is a well-formed slide with clrMapOvr", () => {
   assert.match(xml, /<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""\/>/);
   assert.match(xml, /<\/p:cSld><p:clrMapOvr><a:masterClrMapping\/><\/p:clrMapOvr><\/p:sld>$/);
 });
+
+test("wrap: false on a free text shape writes wrap=\"none\"", () => {
+  const xml = shapeXml({ x: 0, y: 0, w: 1, h: 1, wrap: false, paras: [{ runs: [{ text: "x" }] }] }, 5, ctx);
+  assert.match(xml, /<a:bodyPr wrap="none" anchor="t" rtlCol="0"\/>/);
+});

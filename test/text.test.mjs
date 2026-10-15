@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { txBodyXml, bodyPrXml } from "../src/ooxml/text.mjs";
+import { txBodyXml, bodyPrXml, rPrXml, pPrXml } from "../src/ooxml/text.mjs";
 import { parseXml, byLocal } from "./helpers.mjs";
 
 const ctx = { lang: "en-US", fonts: { mono: "JetBrains Mono" }, link: (url) => (url === "https://x.test" ? "rId7" : "rId8") };
@@ -83,4 +83,37 @@ test("bodyPr: attributes only when set, autofit children", () => {
 
 test("a run with a link but no link callback throws", () => {
   assert.throws(() => txBodyXml([{ runs: [{ text: "x", link: "https://x" }] }], { lang: "en-US", fonts: { mono: "M" } }, {}), /link/);
+});
+
+test("runs can name any typeface, and carry underline, strike, alpha and a highlight in schema order", () => {
+  const xml = rPrXml({ text: "x", typeface: "Plus Jakarta Sans", color: "#112233", alpha: 0.5, highlight: "#F5F5F5", u: true, strike: true }, ctx);
+  assert.equal(
+    xml,
+    '<a:rPr lang="en-US" u="sng" strike="sngStrike" dirty="0"><a:solidFill><a:srgbClr val="112233"><a:alpha val="50000"/></a:srgbClr></a:solidFill>' +
+      '<a:highlight><a:srgbClr val="F5F5F5"/></a:highlight><a:latin typeface="Plus Jakarta Sans"/><a:cs typeface="Plus Jakarta Sans"/></a:rPr>',
+  );
+});
+
+test("a typeface wins over a font role, and the last run's typeface carries into endParaRPr", () => {
+  const xml = txBodyXml([{ runs: [{ text: "a", typeface: "Inter", font: "heading", size: 12 }] }], ctx);
+  assert.match(xml, /<a:endParaRPr lang="en-US" sz="1200" dirty="0"><a:latin typeface="Inter"\/><a:cs typeface="Inter"\/><\/a:endParaRPr>/);
+  assert.doesNotMatch(xml, /\+mj-lt/);
+});
+
+test("free text box paragraphs take exact line spacing, a bullet color and measured margins", () => {
+  assert.equal(
+    pPrXml({ bullet: "char", bulletColor: "#1A833B", lineSpacing: 21, marL: 0.3, indent: -0.15 }, ctx),
+    '<a:pPr marL="274320" indent="-137160"><a:lnSpc><a:spcPts val="2100"/></a:lnSpc><a:buClr><a:srgbClr val="1A833B"/></a:buClr><a:buFont typeface="Arial"/><a:buChar char="•"/></a:pPr>',
+  );
+  assert.equal(
+    pPrXml({ bullet: "number", number: 3, bulletColor: "accent1" }, ctx),
+    '<a:pPr marL="228600" indent="-182880"><a:buClr><a:schemeClr val="accent1"/></a:buClr><a:buFont typeface="+mj-lt"/><a:buAutoNum type="arabicPeriod" startAt="3"/></a:pPr>',
+  );
+  assert.equal(pPrXml({ lineSpacing: 18.5 }, ctx), '<a:pPr><a:lnSpc><a:spcPts val="1850"/></a:lnSpc></a:pPr>');
+  assert.equal(pPrXml({ bullet: "none", marL: 0.5 }, ctx), '<a:pPr marL="457200" indent="0"/>');
+});
+
+test("placeholders can switch off wrapping and insets too (render mode's measured titles)", () => {
+  assert.equal(bodyPrXml({ placeholder: true, wrap: false, inset: 0, anchor: "t" }), '<a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="t"/>');
+  assert.equal(bodyPrXml({ placeholder: true }), "<a:bodyPr/>");
 });

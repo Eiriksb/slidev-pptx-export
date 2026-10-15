@@ -62,7 +62,7 @@ export function shapeXml(shape, id, ctx) {
   const spPr =
     `<p:spPr>${xfrmXml(shape)}${geometryXml({ ...shape, geometry })}` +
     `${shape.fill ? solidFill(shape.fill) : "<a:noFill/>"}${lineXml(shape.line)}${shape.shadow ? SHADOW : ""}</p:spPr>`;
-  const body = txBodyXml(shape.paras || [], ctx, { anchor: shape.anchor || "t", inset: shape.inset });
+  const body = txBodyXml(shape.paras || [], ctx, { anchor: shape.anchor || "t", inset: shape.inset, wrap: shape.wrap });
   return `<p:sp>${nvSpPr}${spPr}${body}</p:sp>`;
 }
 

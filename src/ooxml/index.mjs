@@ -123,14 +123,27 @@ export async function writePptx(slides, deck) {
     // Only placeholders that have content are put on the slide; empty ones would show
     // "Click to add text" prompts in the editor.
     const ph = spec.placeholders || {};
+    // placeholders.titleZ (render mode) is how many shapes are drawn beneath the title, in DOM
+    // order. Without it the title comes first, as every placeholder does.
+    let heldTitle = null;
     for (const p of layout.def.placeholders) {
       const paras = ph[p.role];
       if (!paras || !paras.length) continue;
       const box = p.role === "title" ? ph.titleBox : p.role === "body" ? ph.bodyBox : undefined;
       const body = p.role === "body" && ph.bodyFontScale ? { fontScale: ph.bodyFontScale } : p.role === "title" && ph.titleBody ? ph.titleBody : {};
-      xml += placeholderXml({ id: nextId++, name: p.name, ph: p.ph, box, paras, ctx: sctx, body });
+      const phXml = placeholderXml({ id: nextId++, name: p.name, ph: p.ph, box, paras, ctx: sctx, body });
+      if (p.role === "title" && ph.titleZ) heldTitle = phXml;
+      else xml += phXml;
     }
-    for (const shape of spec.shapes || []) xml += await shapeToXml(shape, nextId++, env);
+    const shapes = spec.shapes || [];
+    for (const [i, shape] of shapes.entries()) {
+      if (heldTitle !== null && i === ph.titleZ) {
+        xml += heldTitle;
+        heldTitle = null;
+      }
+      xml += await shapeToXml(shape, nextId++, env);
+    }
+    if (heldTitle !== null) xml += heldTitle;
 
     let bg = "";
     if (spec.background?.image) bg = backgroundXml(spec.background, pkg.rel(part, media.add(spec.background.image), REL.image));

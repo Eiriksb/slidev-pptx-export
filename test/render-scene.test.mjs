@@ -126,3 +126,16 @@ test("a scene with every node kind writes a lint-clean package", async () => {
   const buffer = await writePptx([spec], { ...DECK, logo: null });
   assert.deepEqual(await lintPackage(buffer), []);
 });
+
+test("a shape drawn before the title in DOM order sits beneath it: titleZ counts those shapes", () => {
+  const hero = { kind: "box", rect: { x: 0, y: 100, w: 980, h: 300 }, fill: C("EEF4F0"), border: null, sides: null, radius: 0, shadow: null, opacity: 1 };
+  const spec = sceneToSpec(scene([hero, text([run("Over the band", { size: 36 })], { role: "title", rect: { x: 56, y: 180, w: 500, h: 40 }, lineHeight: 40 })]), STYLE);
+  assert.equal(spec.placeholders.titleZ, 1);
+  assert.equal(spec.shapes.length, 1);
+});
+
+test("a title drawn first has no titleZ", () => {
+  const card = { kind: "box", rect: { x: 0, y: 0, w: 100, h: 100 }, fill: C("EEF4F0"), border: null, sides: null, radius: 0, shadow: null, opacity: 1 };
+  const spec = sceneToSpec(scene([text([run("Title", { size: 36 })], { role: "title" }), card]), STYLE);
+  assert.equal("titleZ" in spec.placeholders, false);
+});

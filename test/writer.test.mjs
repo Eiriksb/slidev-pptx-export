@@ -135,3 +135,25 @@ test("images from buffers share media with file images; slides take solid and pi
   assert.match(z.text("ppt/slides/slide1.xml"), /<a:srcRect l="25000" r="25000"\/>/);
   assert.match(z.text("ppt/slides/slide2.xml"), /<p:bg><p:bgPr><a:blipFill dpi="0" rotWithShape="1"><a:blip r:embed="rId2"\/><a:srcRect\/><a:stretch><a:fillRect\/><\/a:stretch><\/a:blipFill><a:effectLst\/><\/p:bgPr><\/p:bg>/);
 });
+
+test("a title with titleZ is drawn among the shapes at its DOM position, not beneath them", async () => {
+  const slides = [
+    {
+      layout: "titleOnly",
+      placeholders: { title: t("TITLE"), titleZ: 1 },
+      shapes: [
+        { kind: "text", x: 1, y: 1, w: 3, h: 1, geometry: "rect", fill: "lt2", paras: [{ runs: [{ text: "FIRST" }] }] },
+        { kind: "text", x: 1, y: 2, w: 3, h: 1, paras: [{ runs: [{ text: "SECOND" }] }] },
+      ],
+    },
+    { layout: "titleOnly", placeholders: { title: t("LATE"), titleZ: 5 }, shapes: [{ kind: "text", x: 1, y: 1, w: 3, h: 1, paras: [{ runs: [{ text: "ONLY" }] }] }] },
+  ];
+  const z = await unzip(await writePptx(slides, DECK));
+  const s1 = z.text("ppt/slides/slide1.xml");
+  const titleAt = s1.indexOf('<p:ph type="title"/>');
+  assert.equal(s1.split('<p:ph type="title"/>').length - 1, 1);
+  assert.ok(s1.indexOf("<a:t>FIRST</a:t>") < titleAt, "the title is drawn above the first shape");
+  assert.ok(titleAt < s1.indexOf("<a:t>SECOND</a:t>"), "the title is drawn beneath the second shape");
+  const s2 = z.text("ppt/slides/slide2.xml");
+  assert.ok(s2.indexOf("<a:t>ONLY</a:t>") < s2.indexOf('<p:ph type="title"/>'), "a titleZ past the last shape goes on top");
+});

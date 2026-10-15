@@ -221,6 +221,10 @@ export function sceneToSpec(scene, style) {
   for (const node of scene.nodes) {
     if (!title && node.kind === "text" && node.role === "title") {
       title = node;
+      // The title placeholder is drawn beneath every ordinary shape, so a shape that sits before
+      // the title in DOM order (a hero band, a card around the h1) would cover it. titleZ tells
+      // the writer how many shapes the title goes above.
+      if (spec.shapes.length > 0) spec.placeholders.titleZ = spec.shapes.length;
       continue;
     }
     spec.shapes.push(...shapesOf(node, u, style));

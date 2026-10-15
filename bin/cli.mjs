@@ -1,8 +1,11 @@
 #!/usr/bin/env node
-// Usage: slidev-pptx-export [input.md] [output.pptx] [--config path/to/pptx.config.mjs]
+// Usage: slidev-pptx-export [input.md] [output.pptx] [--config path/to/pptx.config.mjs] [--render]
 //
 // Without --config, looks for pptx.config.mjs next to input.md, falling back to the built-in
 // generic defaults (plain colors/fonts, no logo, no chart resolvers) if none is found.
+//
+// --render runs the deck with its own Slidev in headless Chromium and converts what is actually
+// drawn (custom CSS, HTML and Vue components included). Needs playwright-chromium installed.
 
 import { existsSync } from "node:fs";
 import { resolve, dirname, basename, extname, isAbsolute } from "node:path";
@@ -12,16 +15,19 @@ import { convert } from "../src/index.mjs";
 function parseArgs(argv) {
   const positional = [];
   let configPath = null;
+  let render = false;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--config") {
       configPath = argv[++i];
     } else if (argv[i].startsWith("--config=")) {
       configPath = argv[i].slice("--config=".length);
+    } else if (argv[i] === "--render") {
+      render = true;
     } else {
       positional.push(argv[i]);
     }
   }
-  return { positional, configPath };
+  return { positional, configPath, render };
 }
 
 async function loadConfig(configPath, inputPath) {
@@ -36,7 +42,7 @@ async function loadConfig(configPath, inputPath) {
 }
 
 async function main() {
-  const { positional, configPath } = parseArgs(process.argv.slice(2));
+  const { positional, configPath, render } = parseArgs(process.argv.slice(2));
   const inputArg = positional[0] || "slides.md";
   const inputPath = resolve(process.cwd(), inputArg);
   if (!existsSync(inputPath)) {
@@ -48,7 +54,7 @@ async function main() {
   const outputArg = positional[1] || `${basename(inputPath, extname(inputPath))}-editable.pptx`;
   const outputPath = resolve(process.cwd(), outputArg);
 
-  const result = await convert({ inputPath, outputPath, config, configDir });
+  const result = await convert({ inputPath, outputPath, config, configDir, render });
   console.log(`Wrote ${result.slideCount} slides to ${result.outputPath}`);
   if (result.translatedCharts) console.log(`Translated ${result.translatedCharts} chart(s) into native editable PowerPoint content.`);
   if (result.unresolvedCharts.length) {

@@ -667,11 +667,20 @@ function slideSpecs(slide, index, codeStore, S) {
   }, index + i, codeStore, S));
 }
 
-export function layoutDeck(parsedSlides, codeStore, config) {
+// One SlideSpec list per parsed slide (a long table can make several). Slides are numbered by
+// their position in the export, so a warning about slide N matches slide N in the .pptx.
+export function layoutEach(parsedSlides, codeStore, config) {
   const S = deckStyle(config);
-  // Slides are numbered by their position in the export, so a warning about slide N matches
-  // slide N in the .pptx even after an earlier table continued onto extra slides.
-  const specs = [];
-  for (const slide of parsedSlides) specs.push(...slideSpecs(slide, specs.length, codeStore, S));
-  return specs;
+  const out = [];
+  let next = 0;
+  for (const slide of parsedSlides) {
+    const specs = slideSpecs(slide, next, codeStore, S);
+    out.push(specs);
+    next += specs.length;
+  }
+  return out;
+}
+
+export function layoutDeck(parsedSlides, codeStore, config) {
+  return layoutEach(parsedSlides, codeStore, config).flat();
 }

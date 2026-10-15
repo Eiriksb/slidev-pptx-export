@@ -56,6 +56,34 @@ await convert({
 });
 ```
 
+## Render mode (`--render`)
+
+By default the exporter reads only `slides.md`, so custom CSS, HTML and Vue components reach
+the `.pptx` only through what `pptx.config.mjs` restates. With `--render` it instead runs the
+deck with its own Slidev in headless Chromium and converts what is actually drawn:
+
+```bash
+npm i -D playwright-chromium   # once, in the deck folder (the package `slidev export` uses)
+npx playwright install chromium
+npx slidev-pptx-export slides.md slides-editable.pptx --render
+```
+
+- Text keeps its rendered font, size, weight, color, letter spacing and position; slide
+  titles still go into title placeholders.
+- Boxes with a background, border, rounded corners or shadow (cards, callouts) become native
+  shapes; lists get native bullets in their rendered colors.
+- Images become native pictures. Anything PowerPoint can't express natively is drawn as a
+  picture of just that element, with a notice naming the slide.
+- `colors` and `fonts` in `pptx.config.mjs` still build the theme (rendered colors that match
+  become theme colors); `logo`, `eyebrowClass` and `cssVarColors` aren't needed.
+  `render: { timeout }` sets the per-slide wait (default 15000 ms). The first slide also waits
+  for Slidev's cold start (Vite dependency optimisation), so slow machines or heavy decks may
+  need a larger timeout.
+- A slide that can't be rendered falls back to the markdown export, with a warning.
+
+Render mode needs the deck's dependencies installed (`npm install` in the deck folder) and
+takes roughly 10–30 seconds per deck.
+
 ## Config
 
 A config file's default export is deep-merged over the built-in defaults

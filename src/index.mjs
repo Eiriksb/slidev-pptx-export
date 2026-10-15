@@ -10,6 +10,7 @@ import { mergeConfig } from "./config.mjs";
 import { splitSlides, parseSlide } from "./parse.mjs";
 import { layoutDeck, deckStyle } from "./layout.mjs";
 import { writePptx } from "./ooxml/index.mjs";
+import { renderSpecs } from "./render/index.mjs";
 
 const LOGO_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif"]);
 
@@ -33,6 +34,7 @@ function usableLogo(logo, configDir) {
  * @param {string} [options.outputPath] - defaults to "<input-basename>-editable.pptx" next to inputPath
  * @param {object} [options.config] - see default-config.mjs; typically loaded from a deck's pptx.config.mjs
  * @param {string} [options.configDir] - directory config-relative paths (logo.path) resolve against; defaults to inputPath's directory
+ * @param {boolean|{screenshots?: boolean}} [options.render] - render the deck with its own Slidev in Chromium and convert what is drawn (see README "Render mode")
  * @returns {Promise<{ outputPath: string, slideCount: number, translatedCharts: number, unresolvedCharts: string[] }>}
  */
 export async function convert(options) {
@@ -52,13 +54,24 @@ export async function convert(options) {
     console.warn(`Warning: data directory "${config.dataDir}" not found next to ${basename(inputPath)} - charts will fall back to placeholders.`);
   }
 
-  config.logo = usableLogo(config.logo, configDir);
+  // Render mode draws whatever logo the page shows, so the config's logo isn't used there.
+  config.logo = options.render ? null : usableLogo(config.logo, configDir);
 
   const { globalFrontmatter, slides } = splitSlides(raw);
   const codeStore = [];
   const parsed = slides.map((s) => ({ ...parseSlide(s.content, codeStore, config), frontmatter: s.frontmatter }));
-  const specs = layoutDeck(parsed, codeStore, config);
-  const style = deckStyle(config);
+  const chartBlocks = parsed.flatMap((s) => s.blocks).filter((b) => b.type === "chart");
+
+  let specs;
+  let style;
+  let rendered = null;
+  if (options.render) {
+    rendered = await renderSpecs({ inputPath, userConfig: options.config || {}, config, parsed, codeStore, screenshots: options.render.screenshots === true });
+    ({ specs, style } = rendered);
+  } else {
+    specs = layoutDeck(parsed, codeStore, config);
+    style = deckStyle(config);
+  }
 
   const buffer = await writePptx(specs, {
     geometry: style.geometry,
@@ -75,12 +88,15 @@ export async function convert(options) {
   const outputPath = resolve(options.outputPath || `${basename(inputPath, extname(inputPath))}-editable.pptx`);
   await writeFile(outputPath, buffer);
 
-  const chartBlocks = parsed.flatMap((s) => s.blocks).filter((b) => b.type === "chart");
-  const translatedCharts = chartBlocks.filter((b) => b.resolved).length;
-  const unresolvedCharts = [...new Set(chartBlocks.filter((b) => !b.resolved).map((b) => b.name))];
-
   // specs, not parsed slides: a long table can continue onto extra slides.
-  return { outputPath, slideCount: specs.length, translatedCharts, unresolvedCharts };
+  const result = {
+    outputPath,
+    slideCount: specs.length,
+    translatedCharts: rendered ? rendered.translatedCharts : chartBlocks.filter((b) => b.resolved).length,
+    unresolvedCharts: rendered ? [] : [...new Set(chartBlocks.filter((b) => !b.resolved).map((b) => b.name))],
+  };
+  if (rendered && options.render.screenshots === true) result.screenshots = rendered.screenshots;
+  return result;
 }
 
 export { mergeConfig } from "./config.mjs";

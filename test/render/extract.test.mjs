@@ -63,6 +63,23 @@ test("svg, canvas and video become raster nodes tagged for screenshots, without 
   assert.deepEqual(s.nodes.map((n) => n.id), [0, 1, 2]);
 });
 
+test("inline padding does not change how lines are counted or where the text sits", opts, async () => {
+  const para = (codeStyle) => `<p style="margin:0;width:200px;font:17.6px/normal Arial">Some words before <code style="${codeStyle}">code</code> and more words after it that wrap</p>`;
+  const padded = (await extractHtml(browser, para("padding:.2em .4em;background:#f5f5f5"))).nodes.find((n) => n.kind === "text");
+  const plain = (await extractHtml(browser, para("background:#f5f5f5"))).nodes.find((n) => n.kind === "text");
+  assert.equal(plain.singleLine, false, "the paragraph wraps");
+  assert.equal(padded.singleLine, false, "the padded code's box must not merge two lines into one");
+  assert.ok(Math.abs(padded.rect.y - plain.rect.y) < 0.5, `y ${padded.rect.y} vs ${plain.rect.y}`);
+  assert.ok(Math.abs(padded.rect.h - plain.rect.h) < 0.5, `h ${padded.rect.h} vs ${plain.rect.h}`);
+});
+
+test("an inline element with opacity 0 contributes no text", opts, async () => {
+  const s = await extractHtml(browser, '<p style="margin:0">Visible <span style="opacity:0">HIDDEN</span> tail</p>');
+  const text = s.nodes.filter((n) => n.kind === "text").map(textOf).join("");
+  assert.ok(text.includes("Visible") && text.includes("tail"), text);
+  assert.ok(!text.includes("HIDDEN"), text);
+});
+
 test("images: content box, natural size, object-fit and border; a broken image is reported missing", opts, async () => {
   const s = await extractHtml(browser,
     `<img src="${PNG}" alt="Pic" style="display:block;width:100px;height:100px;object-fit:cover;padding:5px;border:1px solid #000">` +

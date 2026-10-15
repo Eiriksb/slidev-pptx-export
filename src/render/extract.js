@@ -307,7 +307,7 @@
         }
         if (n.nodeType !== Node.ELEMENT_NODE) continue;
         const ccs = getComputedStyle(n);
-        if (ccs.display === "none" || ccs.visibility === "hidden") continue;
+        if (ccs.display === "none" || ccs.visibility === "hidden" || parseFloat(ccs.opacity) === 0) continue;
         if (n.localName === "br") {
           runs.push({ ...runStyle(ccs, deco, highlight), text: "\n", br: true });
           continue;
@@ -320,6 +320,26 @@
       }
     }
 
+    // The client rects of the text inside a list of inline nodes. Only text counts: an inline
+    // element's own border box (padding, background) can overlap the neighbouring lines, so
+    // counting it would merge two lines into one. Skips what collectRuns skips, and the
+    // non-inline elements that become nodes of their own.
+    function textRects(list, out) {
+      for (const n of list) {
+        if (n === BREAK) continue;
+        if (n.nodeType === Node.TEXT_NODE) {
+          const range = document.createRange();
+          range.selectNodeContents(n);
+          for (const x of range.getClientRects()) if (x.width > 0 && x.height > 0) out.push(x);
+        } else if (n.nodeType === Node.ELEMENT_NODE) {
+          const ccs = getComputedStyle(n);
+          if (ccs.display === "none" || ccs.visibility === "hidden" || parseFloat(ccs.opacity) === 0) continue;
+          if (isInlineFlow(n)) textRects(n.childNodes, out);
+        }
+      }
+      return out;
+    }
+
     // Measures a list of inline nodes: its rect, how many lines it wraps to, and where its
     // first and last lines start.
     function measure(list) {
@@ -328,9 +348,15 @@
       const range = document.createRange();
       range.setStartBefore(dom[0]);
       range.setEndAfter(dom[dom.length - 1]);
-      const rr = range.getBoundingClientRect();
+      let rr = range.getBoundingClientRect();
       if (!rr.width || !rr.height) return null;
-      const rects = [...range.getClientRects()].filter((x) => x.width > 0 && x.height > 0).sort((a, b) => a.top - b.top);
+      let rects = textRects(dom, []);
+      if (rects.length) {
+        const left = Math.min(...rects.map((x) => x.left));
+        const top = Math.min(...rects.map((x) => x.top));
+        rr = new DOMRect(left, top, Math.max(...rects.map((x) => x.right)) - left, Math.max(...rects.map((x) => x.bottom)) - top);
+      } else rects = [...range.getClientRects()].filter((x) => x.width > 0 && x.height > 0);
+      rects.sort((a, b) => a.top - b.top);
       let lines = 0;
       let bottom = -Infinity;
       let firstTop = rr.top;

@@ -61,6 +61,39 @@
     return { hex, alpha: Math.round(a * 1000) / 1000 };
   }
 
+  const WHITE = { hex: "FFFFFF", alpha: 1 };
+
+  // Source-over: color `top` painted over color `bottom` (each { hex, alpha }).
+  function composite(top, bottom) {
+    const at = top.alpha;
+    const ab = bottom.alpha;
+    const a = at + ab * (1 - at);
+    if (!(a > 0.001)) return { hex: top.hex, alpha: 0 };
+    const ch = (c) => [0, 2, 4].map((i) => parseInt(c.hex.slice(i, i + 2), 16));
+    const t = ch(top);
+    const b = ch(bottom);
+    const hex = t.map((v, i) => Math.round((v * at + b[i] * ab * (1 - at)) / a).toString(16).padStart(2, "0")).join("").toUpperCase();
+    return { hex, alpha: Math.round(a * 1000) / 1000 };
+  }
+
+  const hasImage = (cs) => !!cs.backgroundImage && cs.backgroundImage !== "none";
+
+  // The color the page shows beneath `el` (its own background left out): the ancestors'
+  // background colors composited down to the first opaque one, on white past the root. A
+  // background image in the way gives null, unless `overImages` (then it is looked through).
+  function colorBehind(el, overImages) {
+    const veils = [];
+    for (let e = el.parentElement; e; e = e.parentElement) {
+      const cs = getComputedStyle(e);
+      if (hasImage(cs) && !overImages) return null;
+      const c = parseColor(cs.backgroundColor);
+      if (!c) continue;
+      veils.push(c);
+      if (c.alpha >= 0.999) break;
+    }
+    return veils.reduceRight((under, c) => composite(c, under), WHITE);
+  }
+
   function firstFamily(list) {
     const fams = String(list || "").split(",").map((f) => f.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
     return fams.find((f) => !GENERIC_FONTS.has(f.toLowerCase())) || fams[0] || "";
@@ -1120,19 +1153,28 @@
       content(el, cs, op, box, rotate);
     }
 
+    // The slide's background: the first background found from the layout root outwards. Slidev
+    // paints its own (white, or #121212 in dark mode) on .slidev-slide-content, around the page,
+    // and many layouts paint none. A translucent color or a gradient without an opaque color of
+    // its own is composited onto the color beneath it; with a picture beneath, it is a picture.
     function backgroundOf() {
-      for (let e = layoutRoot; e && e !== pageEl.parentElement; e = e.parentElement) {
+      for (let e = layoutRoot; e; e = e.parentElement) {
         const cs = getComputedStyle(e);
-        if (cs.backgroundImage && cs.backgroundImage !== "none") {
-          const bg = backgroundImageOf(cs, rectOf(e.getBoundingClientRect()));
-          if (bg && bg.gradient) return { gradient: bg.gradient, base: parseColor(cs.backgroundColor) };
-          const why = bg && bg.unsupported;
-          return { raster: true, reason: why === "gradient" ? "gradient background" : /gradient/.test(why || "") ? why : "background image" };
-        }
         const c = parseColor(cs.backgroundColor);
-        if (c) return { color: c };
+        const raster = (why) => ({ raster: true, reason: why === "gradient" ? "gradient background" : /gradient/.test(why || "") ? why : "background image" });
+        if (hasImage(cs)) {
+          const bg = backgroundImageOf(cs, rectOf(e.getBoundingClientRect()));
+          if (!bg || !bg.gradient) return raster(bg && bg.unsupported);
+          const under = c && c.alpha >= 0.999 ? WHITE : colorBehind(e, false);
+          if (!under) return raster("background image");
+          return { gradient: bg.gradient, base: c ? composite(c, under) : under };
+        }
+        if (!c) continue;
+        if (c.alpha >= 0.999) return { color: c };
+        const under = colorBehind(e, false);
+        return under ? { color: composite(c, under) } : raster("background image");
       }
-      return { color: { hex: "FFFFFF", alpha: 1 } };
+      return { color: WHITE };
     }
 
     content(pageEl, getComputedStyle(pageEl), 1, rectOf(origin), 0);

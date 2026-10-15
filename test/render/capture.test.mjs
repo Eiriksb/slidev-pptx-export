@@ -11,9 +11,47 @@ const textOf = (node) => node.runs.map((r) => r.text).join("");
 // What Slidev's /<n>?print serves, boiled down: every slide in the DOM at once, plus the
 // window.__slidev__ data capture reads. Slide 1 has an image whose server never answers,
 // slide 2 is Slidev's slide-error layout, slide 3 has a CSS background that 404s.
-const page = (n, inner) =>
+const page = (n, inner, layoutStyle = "") =>
   `<div class="slidev-page slidev-page-${n}" style="position:relative;width:980px;height:552px;overflow:hidden">` +
-  `<div class="slidev-layout default" style="width:100%;height:100%;box-sizing:border-box;padding:40px">${inner}</div></div>`;
+  `<div class="slidev-layout default" style="width:100%;height:100%;box-sizing:border-box;padding:40px;${layoutStyle}">${inner}</div></div>`;
+const slidevData = (total) =>
+  `<script>window.__slidev__ = { nav: { total: ${total}, slides: Array.from({ length: ${total} }, (_, i) => ({ no: i + 1, meta: { slide: { sourceIndex: i } } })) }, configs: { canvasWidth: 980, aspectRatio: 16 / 9 } };</script>`;
+
+// Serves `html` for every slide route (/1, /2, ...) and 404 for everything else.
+async function serve(t, html) {
+  const server = createServer((req, res) => {
+    const path = new URL(req.url, "http://localhost").pathname;
+    if (/^\/\d+$/.test(path)) return void res.writeHead(200, { "content-type": "text/html" }).end(html);
+    res.writeHead(404).end("not found");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  return `http://127.0.0.1:${server.address().port}`;
+}
+
+// The share of a PNG's pixels that are (opaque and) near black, decoded in Chromium.
+async function darkShare(png) {
+  const browser = await chromium.launch();
+  try {
+    const tab = await browser.newPage();
+    return await tab.evaluate(async (b64) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${b64}`;
+      await img.decode();
+      const c = document.createElement("canvas");
+      c.width = img.width;
+      c.height = img.height;
+      const x = c.getContext("2d");
+      x.drawImage(img, 0, 0);
+      const d = x.getImageData(0, 0, c.width, c.height).data;
+      let dark = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] < 90 && d[i + 3] > 200) dark++;
+      return dark / (d.length / 4);
+    }, png.toString("base64"));
+  } finally {
+    await browser.close();
+  }
+}
 const HTML =
   "<!doctype html><html><head><style>body{margin:0;font-family:Arial,sans-serif}</style><script>" +
   "window.__slidev__ = { nav: { total: 3, slides: [1, 2, 3].map((no) => ({ no, meta: { slide: { sourceIndex: no - 1 } } })) }, configs: { canvasWidth: 980, aspectRatio: 16 / 9 } };" +
@@ -130,4 +168,21 @@ test("an SVG that loaded in the page but whose fetched bytes won't draw is a pic
   assert.match(node.reason, /^image not fetched: /);
   assert.ok(!node.reason.includes("\n"), node.reason);
   assert.equal(node.svg, undefined);
+});
+
+test("Vite's error overlay (one slide's compile error shows on every page) stays out of pictures and screenshots", opts, async (t) => {
+  const overlay = '<vite-error-overlay style="position:fixed;inset:0;display:block;background:#000;z-index:99999"></vite-error-overlay>';
+  const html =
+    `<!doctype html><html><head><style>body{margin:0}</style>${slidevData(1)}</head><body>` +
+    page(1, '<svg width="200" height="100" style="display:block"><rect width="200" height="100" fill="#ffcc00"/></svg>', "background:repeating-linear-gradient(45deg, #ffcc00 0 10px, #ffffff 10px 20px)") +
+    `${overlay}</body></html>`;
+  const { slides: [slide] } = await captureDeck({ baseUrl: await serve(t, html), chromium, timeout: 15000, screenshots: true });
+  assert.equal(slide.error, undefined);
+  const [svg] = slide.nodes;
+  assert.deepEqual([svg.kind, svg.reason], ["raster", "inline SVG"]);
+  assert.ok(slide.background.png, "the striped background is a picture");
+  for (const [what, png] of [["picture", svg.png], ["background", slide.background.png], ["screenshot", slide.screenshot]]) {
+    const dark = await darkShare(png);
+    assert.ok(dark < 0.01, `${what}: ${(dark * 100).toFixed(1)}% black`);
+  }
 });

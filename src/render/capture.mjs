@@ -53,6 +53,8 @@ async function captureSlide(page, baseUrl, s, canvas, screenshots) {
   await page.evaluate(() => document.fonts.ready.then(() => true));
   await assertSlideLoaded(page, sel);
   await waitForStableCanvases(page);
+  // Again, in case Vite reloaded the page while it settled.
+  await hideViteOverlay(page);
   const screenshot = screenshots ? await page.locator(sel).screenshot({ animations: "disabled" }) : null;
   await page.addScriptTag({ content: EXTRACT });
   const scene = await page.evaluate(({ pageSel, size }) => window.__pptxExtract(document.querySelector(pageSel), size), { pageSel: sel, size: canvas });
@@ -71,6 +73,15 @@ async function captureSlide(page, baseUrl, s, canvas, screenshots) {
 async function open(page, url) {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {});
+  await hideViteOverlay(page);
+}
+
+// Every page load renders every slide, so one slide's compile error makes Vite draw its full-page
+// error overlay (with the deck's file paths) over all of them. That slide fails on its own (see
+// assertSlideLoaded); the overlay must not end up in the other slides' pictures.
+async function hideViteOverlay(page) {
+  const present = await page.evaluate(() => !!document.getElementById("pptx-hide-vite-overlay"));
+  if (!present) await page.addStyleTag({ content: "vite-error-overlay{display:none!important}" }).then((h) => h.evaluate((el) => (el.id = "pptx-hide-vite-overlay")));
 }
 
 // When a slide's module fails (a missing asset, a template error, a broken layout) Slidev draws its

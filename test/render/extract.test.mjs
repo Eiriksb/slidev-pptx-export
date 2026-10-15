@@ -134,6 +134,14 @@ test("backgrounds: the layout root's color is the slide background; an image bac
   assert.equal(g.layout, "default");
 });
 
+test("a layout that paints no background takes the color Slidev paints around the page (dark mode); translucent ones are composited onto it", opts, async () => {
+  assert.deepEqual((await extractHtml(browser, "<p>x</p>", { contentStyle: "background:#121212" })).background, { color: { hex: "121212", alpha: 1 } });
+  const veiled = await extractHtml(browser, "<p>x</p>", { contentStyle: "background:#000000", layoutStyle: "background:rgba(255, 255, 255, 0.5)" });
+  assert.deepEqual(veiled.background, { color: { hex: "808080", alpha: 1 } });
+  const glow = await extractHtml(browser, "<p>x</p>", { contentStyle: "background:#121212", layoutStyle: "background:linear-gradient(#ff0000, transparent)" });
+  assert.deepEqual(glow.background.base, { hex: "121212", alpha: 1 }, "a gradient with no color of its own sits on the color beneath it");
+});
+
 test("gradients: a radial glow over a color is a native background gradient; a linear gradient fills a box; layered backgrounds stay pictures", opts, async () => {
   const glow = await extractHtml(browser, "<p>x</p>", { layoutStyle: "background:radial-gradient(60% 50% at 50% 38%, rgba(26, 131, 59, 0.12) 0%, transparent 70%), #ffffff" });
   assert.deepEqual(glow.background, {

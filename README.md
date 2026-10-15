@@ -54,7 +54,13 @@ await convert({
   outputPath: "slides-editable.pptx",
   config: { colors: { accent: "1A833B" } },
 });
+
+// Render mode (see below): runs the deck's own Slidev in headless Chromium.
+await convert({ inputPath: "slides.md", outputPath: "slides-editable.pptx", render: true });
 ```
+
+`render: { screenshots: true }` also returns Slidev's own screenshot of each exported slide as
+`result.screenshots` (`null` for a slide exported from markdown), which the visual check uses.
 
 ## Render mode (`--render`)
 
@@ -76,29 +82,36 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
   (a block that scrolls or wraps in the page is a picture instead).
 - Chart.js bar charts (e.g. through vue-chartjs) become native, editable charts with the
   page's data, colors, axis range and number format; horizontal bars keep their order. Only
-  charts PowerPoint can draw faithfully are native: mixed chart types, non-numeric data,
-  logarithmic or second value axes, stack groups, chart titles, scripted or per-bar colors,
-  and rotated or translucent charts are pictures. A `chartResolvers` entry returning
-  `kind: "barchart"` for the component still wins.
+  charts PowerPoint can draw faithfully are native: for example, other chart types, mixed
+  types, a log or second value axis, stack groups, a chart title, per-bar or scripted colors,
+  and rotated or translucent charts are exported as pictures. A `chartResolvers` entry
+  returning `kind: "barchart"` for the component still wins.
 - Images become native pictures; one that didn't load is skipped, with a notice. SVG images
-  stay vector in PowerPoint 2016+ (with a PNG fallback elsewhere) when their box has the SVG's
-  aspect, and are pictures otherwise. A `url()` background is native only when it is centred
-  cover/contain or 100% 100%, and a radial gradient whose shape differs a lot from its box
-  becomes a picture.
+  stay vector in PowerPoint 2016+ (with a PNG fallback elsewhere) when their box has the
+  SVG's aspect, and are pictures otherwise. A `url()` background is native only when it is
+  centred cover/contain or 100% 100%, and a radial gradient whose shape differs a lot from
+  its box becomes a picture.
 - Elements drawn identically on every slide, like a footer logo, go on the slide master once,
-  unless slide content covers them.
+  unless slide content covers them. A picture there is reported as "slide master".
 - Anything PowerPoint can't express natively (blur and other CSS filters, masks, inline SVG
   drawings, other canvases, and the cases above) is drawn as a picture of just that element,
   with a notice naming the slide.
 - `colors` and `fonts` in `pptx.config.mjs` still build the theme (rendered colors that match
-  become theme colors); `logo`, `eyebrowClass` and `cssVarColors` aren't needed.
-  `render: { timeout }` sets the per-slide wait (default 15000 ms). The first slide also waits
-  for Slidev's cold start (Vite dependency optimisation), so slow machines or heavy decks may
-  need a larger timeout.
-- A slide Slidev can't load or render falls back to the markdown export, with a warning.
+  become theme colors); `logo`, `eyebrowClass` and `cssVarColors` aren't needed, and a notice
+  says they are ignored when the config sets them. `render: { timeout }` sets the per-slide
+  wait (default 15000 ms). The first slide also waits for Slidev's cold start (Vite
+  dependency optimisation), so slow machines or heavy decks may need a larger timeout.
+- A slide Slidev can't load or render falls back to the markdown export, with a warning. When
+  Slidev can't start (for example its theme isn't installed), Chromium can't launch or the
+  Slidev version isn't supported, the export stops with an error instead.
+- Limits: each slide is captured in its final `v-click` state, with every fragment shown.
+  Animations and transitions, hyperlinks (link text keeps its styling), Slidev drawings and
+  font embedding (viewers need the fonts) aren't carried over.
 
-Render mode needs the deck's dependencies installed (`npm install` in the deck folder) and
-takes roughly 10–30 seconds per deck.
+Render mode needs the deck's dependencies installed (`npm install` in the deck folder), Node
+20.12 or newer (what Slidev 52 requires) and Playwright's Chromium, from `playwright-chromium`
+or `playwright`, found in the deck folder first and then next to this package. It takes
+roughly 10–30 seconds per deck.
 
 ## Config
 
@@ -158,22 +171,26 @@ renders as a labeled placeholder box instead of failing the whole export.
 ## Development
 
 ```bash
-npm test         # unit tests, package lint, kitchen-sink fixture export
-npm run render   # LibreOffice render of the fixture (and ../innotek-SlideDevBase if present) to out/render/
+npm test                    # unit tests, package lint, kitchen-sink fixture export
+npm run render              # LibreOffice render of the fixture (and ../innotek-SlideDevBase if present) to out/render/
 npm run test:render         # browser tests (needs playwright-chromium; skips otherwise)
 npm run render -- --render  # render-mode export + visual check against Slidev's own screenshots
 ```
 
 The browser tests (`test/render/`) use `playwright-chromium` and `chart.js`, both
-devDependencies; `chart.js` is only there to draw test charts. `npm test` needs no browser.
+devDependencies; `chart.js` is only there to draw test charts. `npm test` needs no
+browser. The render checks skip when LibreOffice, poppler or Chromium isn't available.
 
 ## What it doesn't do
 
-This is a markdown -> pptx layout engine tuned for the patterns Slidev decks commonly use,
-not a full HTML/CSS renderer. Arbitrary nested HTML, custom Vue components without a
-resolver, and complex CSS layouts fall back to a flattened, best-effort text rendering.
+The default mode is a markdown -> pptx layout engine tuned for the patterns Slidev decks
+commonly use, not a full HTML/CSS renderer. Arbitrary nested HTML, custom Vue components
+without a resolver, and complex CSS layouts fall back to a flattened, best-effort text
+rendering. `--render` converts what the page draws instead, so custom HTML, CSS and Vue
+components come through (see Render mode above for its limits).
 
 In the default mode only PNG/JPEG/GIF images and logos embed natively; an SVG image exports
-as a labeled placeholder and an SVG logo is skipped (`--render` embeds SVG images, see above). A `layout: section` slide whose body is more than
-plain text/bullets (a table, chart or card row) uses the *Title Only* layout instead of
-*Section Header*, since that content doesn't fit the section body placeholder.
+as a labeled placeholder and an SVG logo is skipped (`--render` embeds SVG images, see
+above). A `layout: section` slide whose body is more than plain text/bullets (a table, chart
+or card row) uses the *Title Only* layout instead of *Section Header*, since that content
+doesn't fit the section body placeholder.

@@ -123,3 +123,15 @@ test("a chartResolvers entry for the chart's component replaces the captured dat
   assert.deepEqual(chart.series.map((s) => s.name), ["Resolved"]);
   assert.equal(result.translatedCharts, 1);
 });
+
+test("a resolver's malformed result warns and keeps the chart drawn on the page", async () => {
+  const chartNode = {
+    kind: "chart", id: 1, rect: { x: 40, y: 200, w: 900, h: 240 }, components: ["ExampleChart"], opacity: 1,
+    chart: { type: "column", categories: ["Q1"], series: [{ name: "Page", values: [1], color: null }], min: null, max: null, stacked: false, legend: true, legendPos: "b", numFmt: null, gridColor: null, labelColor: null, legendColor: null },
+  };
+  const userConfig = { chartResolvers: { ExampleChart: () => ({ kind: "barchart", labels: ["From"] }) } };
+  const { args } = setup("# A\n", { userConfig, slides: [scene(1, 0, "A", [chartNode])] });
+  const { result, warnings } = await withWarnings(() => renderSpecs(args));
+  assert.deepEqual(result.specs[0].shapes.find((s) => s.kind === "chart").chart.series.map((s) => s.name), ["Page"]);
+  assert.equal(warnings.filter((w) => /^Warning: chart resolver ExampleChart failed \(/.test(w) && w.endsWith("using the chart drawn on the page.")).length, 1, warnings.join("\n"));
+});

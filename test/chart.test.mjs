@@ -112,3 +112,21 @@ test("render-mode chart options: number format, legend position, stacking, gridl
   const buffer = await writePptx([{ layout: "blank", shapes: [{ kind: "chart", x: 1, y: 1, w: 6, h: 3, chart: spec }] }], DECK);
   assert.deepEqual(await lintPackage(buffer), []);
 });
+
+test("a horizontal chart can list its first category at the top, with the value axis kept at the bottom", async () => {
+  const spec = { ...SPEC, type: "bar", reverseCategories: true };
+  const xml = chartXml(spec, { lang: "en-US", workbookRId: "rId1" });
+  assert.match(xml, /<c:catAx><c:axId val="50001"\/><c:scaling><c:orientation val="maxMin"\/><\/c:scaling>/);
+  assert.match(xml, /<c:crossAx val="50001"\/><c:crosses val="max"\/><c:crossBetween val="between"\/><\/c:valAx>/);
+  assert.equal((xml.match(/<c:orientation val="minMax"\/>/g) || []).length, 1, "only the value axis keeps minMax");
+  const buffer = await writePptx([{ layout: "blank", shapes: [{ kind: "chart", x: 1, y: 1, w: 6, h: 3, chart: spec }] }], DECK);
+  assert.deepEqual(await lintPackage(buffer), []);
+  const plain = chartXml({ ...SPEC, type: "bar" }, { lang: "en-US", workbookRId: "rId1" });
+  assert.doesNotMatch(plain, /maxMin|crosses val="max"/);
+});
+
+test("a series color can carry an alpha", () => {
+  const xml = chartXml({ ...SPEC, series: [{ name: "A", color: "accent5", alpha: 0.4, values: [1, 2, 3] }, { name: "B", color: "#123456", values: [1, 2, 3] }] }, { lang: "en-US", workbookRId: "rId1" });
+  assert.match(xml, /<c:spPr><a:solidFill><a:schemeClr val="accent5"><a:alpha val="40000"\/><\/a:schemeClr><\/a:solidFill><a:ln><a:noFill\/><\/a:ln><\/c:spPr><c:invertIfNegative val="0"\/>/);
+  assert.match(xml, /<c:spPr><a:solidFill><a:srgbClr val="123456"\/><\/a:solidFill><a:ln><a:noFill\/><\/a:ln><\/c:spPr><c:invertIfNegative val="0"\/>/);
+});

@@ -49,7 +49,7 @@ export function chartXml(spec, { lang, workbookRId }) {
       return (
         `<c:ser><c:idx val="${j}"/><c:order val="${j}"/>` +
         `<c:tx><c:strRef><c:f>Sheet1!$${col}$1</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>${esc(s.name)}</c:v></c:pt></c:strCache></c:strRef></c:tx>` +
-        `<c:spPr>${solidFill(s.color)}<a:ln><a:noFill/></a:ln></c:spPr><c:invertIfNegative val="0"/>${dLbls}` +
+        `<c:spPr>${solidFill(s.color, s.alpha)}<a:ln><a:noFill/></a:ln></c:spPr><c:invertIfNegative val="0"/>${dLbls}` +
         `<c:cat><c:strRef><c:f>Sheet1!$A$2:$A$${n + 1}</c:f>${catCache}</c:strRef></c:cat>` +
         `<c:val><c:numRef><c:f>Sheet1!$${col}$2:$${col}$${n + 1}</c:f><c:numCache><c:formatCode>${esc(spec.numFmt || "General")}</c:formatCode><c:ptCount val="${n}"/>${pts}</c:numCache></c:numRef></c:val>` +
         "</c:ser>"
@@ -68,14 +68,16 @@ export function chartXml(spec, { lang, workbookRId }) {
   // CT_ValAx: majorGridlines sits between axPos and numFmt.
   const grid = spec.gridColor ? `<c:majorGridlines><c:spPr><a:ln w="9525">${solidFill(spec.gridColor, spec.gridAlpha)}</a:ln></c:spPr></c:majorGridlines>` : "";
   const catAx =
-    `<c:catAx><c:axId val="${CAT_AX}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/>` +
+    `<c:catAx><c:axId val="${CAT_AX}"/><c:scaling><c:orientation val="${spec.reverseCategories ? "maxMin" : "minMax"}"/></c:scaling><c:delete val="0"/>` +
     `<c:axPos val="${horizontal ? "l" : "b"}"/>${ticks}${NO_LINE}${txPr(spec.catLabelSize, spec.catLabelColor, lang)}` +
     `<c:crossAx val="${VAL_AX}"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx>`;
-  // No gridColor = no c:majorGridlines element = no gridlines.
+  // No gridColor = no c:majorGridlines element = no gridlines. reverseCategories lists the first
+  // category at the top of a horizontal chart (as Chart.js does); the value axis then crosses at
+  // the last category so it stays at the bottom.
   const valAx =
     `<c:valAx><c:axId val="${VAL_AX}"/>${scaling}<c:delete val="${spec.valueAxis ? 0 : 1}"/>` +
     `<c:axPos val="${horizontal ? "b" : "l"}"/>${grid}${valTicks}${NO_LINE}${txPr(spec.valLabelSize ?? 9, spec.valLabelColor ?? "accent3", lang)}` +
-    `<c:crossAx val="${CAT_AX}"/><c:crosses val="autoZero"/><c:crossBetween val="between"/></c:valAx>`;
+    `<c:crossAx val="${CAT_AX}"/><c:crosses val="${spec.reverseCategories ? "max" : "autoZero"}"/><c:crossBetween val="between"/></c:valAx>`;
   const legend = spec.legend
     ? `<c:legend><c:legendPos val="${spec.legendPos || "b"}"/><c:overlay val="0"/>${txPr(spec.legendSize ?? 11, spec.legendColor ?? "dk1", lang)}</c:legend>`
     : "";

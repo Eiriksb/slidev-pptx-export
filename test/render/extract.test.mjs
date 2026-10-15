@@ -1,7 +1,8 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { usableChromium, extractHtml } from "./helpers.mjs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { ROOT, usableChromium, extractHtml } from "./helpers.mjs";
 
 const chromium = await usableChromium();
 const browser = chromium ? await chromium.launch() : null;
@@ -274,39 +275,147 @@ test("a column no cell starts in shares the gap, and an empty cell still gets a 
   assert.deepEqual([t.rows[1][0].runs, t.rows[1][0].lineHeight], [[], 12]);
 });
 
-test("a Chart.js bar chart becomes a chart node with its data, colors, axis range, legend and tick format; other canvases stay pictures", opts, async () => {
+// Charts: real Chart.js (a devDependency) drawing real canvases, found through Chart.getChart.
+const CHARTJS_FILE = join(ROOT, "node_modules/chart.js/dist/chart.umd.js");
+const CHARTJS = existsSync(CHARTJS_FILE) ? readFileSync(CHARTJS_FILE, "utf8") : null;
+const chartOpts = { skip: !browser ? opts.skip : CHARTJS ? false : "chart.js is not installed - run npm install" };
+const LIB = `<script>${CHARTJS}</script><script>Chart.defaults.animation=false;Chart.defaults.responsive=false;</script>`;
+// A canvas and the script that draws `config` (JS source) on it.
+const canvasOf = (config, style = "display:block") =>
+  `<canvas width="400" height="200" style="${style}"></canvas><script>new Chart(document.currentScript.previousElementSibling,${config})</script>`;
+const bar = (datasets, options = "{}", labels = "['Q1','Q2']") => `{type:'bar',data:{labels:${labels},datasets:[${datasets}]},options:${options}}`;
+const GREEN = "{label:'A',data:[22,31],backgroundColor:'#1A833B'}";
+const chartPage = async (config, style) => (await extractHtml(browser, LIB + canvasOf(config, style))).nodes;
+const C = (hex, alpha = 1) => ({ hex, alpha });
+
+test("a Chart.js bar chart becomes a chart node with its data, colors, alpha, axis range, legend and tick format", chartOpts, async () => {
+  const nodes = await chartPage(bar(
+    "{label:'Before',data:[22,31],backgroundColor:'rgba(26,131,59,0.4)'},{label:'After',data:[41,null],backgroundColor:['#9CA3AF','#9CA3AF']},{label:'Hidden',data:[1,2],hidden:true}",
+    "{scales:{y:{max:100,ticks:{color:'#5b6b63',callback:(v)=>v+'%'},grid:{color:'rgba(20,24,26,0.1)'}},x:{grid:{display:false}}},plugins:{legend:{position:'bottom',labels:{color:'#1f2937'}}}}",
+  ));
+  assert.deepEqual(nodes.map((n) => n.kind), ["chart"]);
+  assert.deepEqual(nodes[0].rect, { x: 40, y: 40, w: 400, h: 200 });
+  assert.deepEqual(nodes[0].components, []);
+  assert.deepEqual(nodes[0].chart, {
+    type: "column", categories: ["Q1", "Q2"],
+    series: [{ name: "Before", values: [22, 31], color: C("1A833B", 0.4) }, { name: "After", values: [41, null], color: C("9CA3AF") }],
+    min: 0, max: 100, stacked: false, valueAxis: true, legend: true, legendPos: "b", numFmt: '0"%"',
+    gridColor: C("14181A", 0.1), labelColor: C("5B6B63"), legendColor: C("1F2937"),
+  });
+});
+
+test("a series without a color takes the one Chart.js drew with (the Colors plugin's, alpha included)", chartOpts, async () => {
+  const [node] = await chartPage(bar("{label:'A',data:[1,2]},{label:'B',data:[3,4]}"));
+  assert.equal(node.kind, "chart");
+  assert.deepEqual(node.chart.series.map((s) => s.color), [C("36A2EB", 0.5), C("FF6384", 0.5)]);
+});
+
+test("a bar chart's value axis starts at zero; a suggested bound is where the drawn axis ended; Chart.js's own tick text stays native", chartOpts, async () => {
+  const [narrow] = await chartPage(bar("{label:'A',data:[90,95,99],backgroundColor:'#1A833B'}", "{}", "['Q1','Q2','Q3']"));
+  assert.deepEqual([narrow.kind, narrow.chart.min, narrow.chart.max, narrow.chart.numFmt], ["chart", 0, null, null]);
+  const [suggested] = await chartPage(bar("{label:'A',data:[1,2],backgroundColor:'#1A833B'}", "{scales:{y:{suggestedMax:50}}}"));
+  assert.deepEqual([suggested.kind, suggested.chart.min, suggested.chart.max], ["chart", 0, 50]);
+  const [explicit] = await chartPage(bar("{label:'A',data:[1,2],backgroundColor:'#1A833B'}", "{scales:{y:{min:-5,max:10,suggestedMax:50}}}"));
+  assert.deepEqual([explicit.chart.min, explicit.chart.max], [-5, 10]);
+  // Fractional ticks (0.5, 1.0) and thousands (1,000) are what the native axis shows too.
+  const [fraction] = await chartPage(bar("{label:'A',data:[0.5,2],backgroundColor:'#1A833B'}"));
+  const [thousands] = await chartPage(bar("{label:'A',data:[900,2400],backgroundColor:'#1A833B'}"));
+  assert.deepEqual([fraction.kind, thousands.kind], ["chart", "chart"]);
+  const [dollars] = await chartPage(bar("{label:'A',data:[1,2],backgroundColor:'#1A833B'}", "{scales:{y:{ticks:{callback:(v)=>'$'+v}}}}"));
+  assert.deepEqual([dollars.kind, dollars.chart.numFmt], ["chart", '"$"0']);
+  const [fixed] = await chartPage(bar("{label:'A',data:[10,20],backgroundColor:'#1A833B'}", "{scales:{y:{ticks:{callback:(v)=>'$'+v.toFixed(1)}}}}"));
+  assert.deepEqual([fixed.kind, fixed.chart.numFmt], ["chart", '"$"0.0']);
+});
+
+test("indexAxis y is a horizontal chart; a hidden value axis is kept hidden and takes its gridlines along", chartOpts, async () => {
+  const [horizontal] = await chartPage(bar(GREEN, "{indexAxis:'y'}"));
+  assert.deepEqual([horizontal.kind, horizontal.chart.type, horizontal.chart.categories, horizontal.chart.series[0].values], ["chart", "bar", ["Q1", "Q2"], [22, 31]]);
+  const [hidden] = await chartPage(bar(GREEN, "{scales:{y:{display:false}}}"));
+  assert.deepEqual([hidden.kind, hidden.chart.valueAxis, hidden.chart.gridColor], ["chart", false, null]);
+});
+
+test("a stacked chart (both axes stacked, one stack) is native and stacked", chartOpts, async () => {
+  const [node] = await chartPage(bar(`${GREEN},{label:'B',data:[5,6],backgroundColor:'#9CA3AF'}`, "{scales:{x:{stacked:true},y:{stacked:true}}}"));
+  assert.deepEqual([node.kind, node.chart.stacked], ["chart", true]);
+});
+
+test("the category axis's own labels option wins over data.labels", chartOpts, async () => {
+  const [node] = await chartPage(bar(GREEN, "{scales:{x:{labels:['one','two']}}}"));
+  assert.deepEqual([node.kind, node.chart.categories], ["chart", ["one", "two"]]);
+});
+
+test("a canvas with a background, border and padding is a box plus a chart in its content box", chartOpts, async () => {
+  const nodes = await chartPage(bar(GREEN), "display:block;padding:10px;border:2px solid #1A833B;background:#EEF4F0");
+  assert.deepEqual(nodes.map((n) => n.kind), ["box", "chart"]);
+  // Chart.js sizes the canvas border-box: 400x200 including the 10px padding and 2px border.
+  assert.deepEqual({ rect: nodes[0].rect, fill: nodes[0].fill, border: nodes[0].border }, { rect: { x: 40, y: 40, w: 400, h: 200 }, fill: C("EEF4F0"), border: { width: 2, color: C("1A833B") } });
+  assert.deepEqual(nodes[1].rect, { x: 52, y: 52, w: 376, h: 176 });
+});
+
+// A chart is native only when it can be drawn faithfully; everything else is a picture.
+const PICTURES = [
+  ["a mixed chart", bar(`${GREEN},{type:'line',label:'B',data:[5,6],borderColor:'#9CA3AF'}`), "display:block", "chart mixed chart types"],
+  ["floating bars", bar("{label:'A',data:[[2,5],[3,9]],backgroundColor:'#1A833B'}"), "display:block", "chart data format"],
+  ["{x, y} data", bar("{label:'A',data:[{x:'Q2',y:5},{x:'Q1',y:7}],backgroundColor:'#1A833B'}"), "display:block", "chart data format"],
+  ["object-keyed data", bar("{label:'A',data:{Q1:5,Q2:7},backgroundColor:'#1A833B'}"), "display:block", "chart data format"],
+  ["a custom parsing key", bar("{label:'A',data:[{m:'Q1',v:5},{m:'Q2',v:7}],parsing:{xAxisKey:'m',yAxisKey:'v'},backgroundColor:'#1A833B'}"), "display:block", "chart custom parsing"],
+  ["a logarithmic axis", bar(GREEN, "{scales:{y:{type:'logarithmic'}}}"), "display:block", "chart value axis type"],
+  ["a second value axis", bar("{label:'A',data:[22,31],yAxisID:'y',backgroundColor:'#1A833B'},{label:'B',data:[1,2],yAxisID:'y1',backgroundColor:'#9CA3AF'}", "{scales:{y1:{position:'right'}}}"), "display:block", "chart second value axis"],
+  ["a value axis beside the one the datasets use", bar(`${GREEN},{label:'B',data:[1,2],yAxisID:'y1',backgroundColor:'#9CA3AF'}`, "{scales:{y1:{position:'right'}}}"), "display:block", "chart second value axis"],
+  ["stack groups", bar(`{label:'A',data:[22,31],stack:'s1',backgroundColor:'#1A833B'},{label:'B',data:[5,6],stack:'s2',backgroundColor:'#9CA3AF'}`, "{scales:{x:{stacked:true},y:{stacked:true}}}"), "display:block", "chart stack groups"],
+  ["one stacked axis", bar(GREEN, "{scales:{y:{stacked:true}}}"), "display:block", "chart stack groups"],
+  ["a hidden category axis", bar(GREEN, "{scales:{x:{display:false}}}"), "display:block", "chart hidden category axis"],
+  ["a reversed axis", bar(GREEN, "{scales:{y:{reverse:true}}}"), "display:block", "chart reversed axis"],
+  ["a title", bar(GREEN, "{plugins:{title:{display:true,text:'Results'}}}"), "display:block", "chart title"],
+  ["per-bar colors", bar("{label:'A',data:[22,31],backgroundColor:['#ff0000','#00ff00']}"), "display:block", "chart per-bar colors"],
+  ["a scripted color", bar("{label:'A',data:[22,31],backgroundColor:(c)=>c.dataIndex?'#ff0000':'#00ff00'}"), "display:block", "chart scripted colors"],
+  ["a gradient fill", bar("{label:'A',data:[22,31],backgroundColor:(()=>{const g=document.currentScript.previousElementSibling.getContext('2d').createLinearGradient(0,0,1,1);g.addColorStop(0,'red');return g})()}"), "display:block", "chart scripted colors"],
+  ["tick labels a number format can't reproduce", bar(GREEN, "{scales:{y:{ticks:{callback:(v)=>(v/10).toFixed(1)}}}}"), "display:block", "chart tick labels"],
+  ["no visible dataset", bar("{label:'A',data:[1,2],hidden:true}"), "display:block", "chart no visible datasets"],
+  ["a rotated canvas", bar(GREEN), "display:block;transform:rotate(10deg)", "rotated chart"],
+  ["a translucent canvas", bar(GREEN), "display:block;opacity:.5", "chart opacity"],
+];
+for (const [name, config, style, reason] of PICTURES) {
+  test(`${name} is a picture (${reason})`, chartOpts, async () => {
+    const nodes = await chartPage(config, style);
+    assert.deepEqual(nodes.map((n) => [n.kind, n.reason]), [["raster", reason]]);
+    assert.equal(nodes[0].label, "canvas");
+  });
+}
+
+test("a chart found through its Vue component names the components around it; other canvases stay pictures", chartOpts, async () => {
   const setup = () => {
-    const [bar, pie] = document.querySelectorAll("canvas");
-    const chart = (canvas, type) => ({
-      canvas, config: { type },
-      data: {
-        labels: ["Q1", "Q2"],
-        datasets: [
-          { label: "Before", data: [22, 31], backgroundColor: "#9CA3AF" },
-          { label: "After", data: [41, null], backgroundColor: ["#1A833B", "#000000"] },
-          { label: "Hidden", data: [1, 2], hidden: true },
-        ],
-      },
-      options: {
-        scales: { y: { min: 0, max: 100, ticks: { color: "#5b6b63", callback: (v) => v + "%" }, grid: { color: "rgba(20, 24, 26, 0.1)" } }, x: { grid: { display: false } } },
-        plugins: { legend: { position: "bottom", labels: { color: "#1f2937" } } },
-      },
-      scales: { y: {} },
-    });
-    bar.__vueParentComponent = { type: {}, exposed: { chart: { value: chart(bar, "bar") } }, parent: { type: { __name: "ExampleChart" }, parent: null } };
-    pie.__vueParentComponent = { type: {}, exposed: { chart: { value: chart(pie, "pie") } }, parent: null };
+    const [barEl, pieEl] = document.querySelectorAll("canvas");
+    const data = {
+      labels: ["Q1", "Q2"],
+      datasets: [
+        { label: "Before", data: [22, 31], backgroundColor: "#9CA3AF" },
+        { label: "After", data: [41, null], backgroundColor: ["#1A833B", "#1A833B"] },
+        { label: "Hidden", data: [1, 2], hidden: true },
+      ],
+    };
+    const options = {
+      scales: { y: { min: 0, max: 100, ticks: { color: "#5b6b63", callback: (v) => v + "%" }, grid: { color: "rgba(20, 24, 26, 0.1)" } }, x: { grid: { display: false } } },
+      plugins: { legend: { position: "bottom", labels: { color: "#1f2937" } } },
+    };
+    const barChart = new Chart(barEl, { type: "bar", data, options });
+    const pieChart = new Chart(pieEl, { type: "pie", data: { labels: ["a", "b"], datasets: [{ data: [1, 2] }] } });
+    // Only the component tree may lead to the chart here.
+    Chart.getChart = () => undefined;
+    barEl.__vueParentComponent = { type: {}, exposed: { chart: { value: barChart } }, parent: { type: { __name: "ExampleChart" }, parent: null } };
+    pieEl.__vueParentComponent = { type: {}, exposed: { chart: { value: pieChart } }, parent: null };
   };
   const s = await extractHtml(browser,
-    '<canvas width="400" height="200" style="display:block"></canvas><canvas width="100" height="100" style="display:block"></canvas><canvas width="50" height="50" style="display:block"></canvas>',
+    `${LIB}<canvas width="400" height="200" style="display:block"></canvas><canvas width="100" height="100" style="display:block"></canvas><canvas width="50" height="50" style="display:block"></canvas>`,
     { setup });
-  const [bar, pie, plain] = s.nodes;
-  assert.equal(bar.kind, "chart");
-  assert.deepEqual(bar.components, ["ExampleChart"]);
-  assert.deepEqual(bar.chart, {
+  const [chart, pie, plain] = s.nodes;
+  assert.equal(chart.kind, "chart");
+  assert.deepEqual(chart.components, ["ExampleChart"]);
+  assert.deepEqual(chart.chart, {
     type: "column", categories: ["Q1", "Q2"],
-    series: [{ name: "Before", values: [22, 31], color: { hex: "9CA3AF", alpha: 1 } }, { name: "After", values: [41, null], color: { hex: "1A833B", alpha: 1 } }],
-    min: 0, max: 100, stacked: false, legend: true, legendPos: "b", numFmt: '0"%"',
-    gridColor: { hex: "14181A", alpha: 0.1 }, labelColor: { hex: "5B6B63", alpha: 1 }, legendColor: { hex: "1F2937", alpha: 1 },
+    series: [{ name: "Before", values: [22, 31], color: C("9CA3AF") }, { name: "After", values: [41, null], color: C("1A833B") }],
+    min: 0, max: 100, stacked: false, valueAxis: true, legend: true, legendPos: "b", numFmt: '0"%"',
+    gridColor: C("14181A", 0.1), labelColor: C("5B6B63"), legendColor: C("1F2937"),
   });
   assert.deepEqual([pie.kind, pie.reason], ["raster", "chart type pie"]);
   assert.deepEqual([plain.kind, plain.reason], ["raster", "canvas"]);

@@ -738,61 +738,166 @@
       return chart ? { chart, components } : null;
     }
 
-    // An axis tick callback like (v) => v + "%" -> the Excel format 0"%" (null if it isn't a
-    // plain prefix/suffix around the number).
-    function tickFormat(cb, scale) {
-      if (typeof cb !== "function") return null;
-      try {
-        const a = String(cb.call(scale, 12, 0, [{ value: 12 }]));
-        const b = String(cb.call(scale, 34.5, 1, [{ value: 34.5 }]));
-        const i = a.indexOf("12");
-        if (i < 0) return null;
-        const pre = a.slice(0, i);
-        const suf = a.slice(i + 2);
-        if ((!pre && !suf) || b !== `${pre}34.5${suf}` || /["\\]/.test(pre + suf)) return null;
-        const q = (s) => (s ? `"${s}"` : "");
-        return `${q(pre)}0${q(suf)}`;
-      } catch {
-        return null;
-      }
+    // How the value axis's tick labels write their number - {pre: "", suf: "%", decimals: 0} for 0%,
+    // 20%, 40% - read from the labels Chart.js drew, so a tick callback is never run. It is
+    // written as the Excel format 0"%". `decimals` is the fixed number of decimals every label
+    // has (0.0, 10.0); labels that differ (Chart.js's own 0, 0.5, 1.0) are plain numbers, and so
+    // is 1,000: the native axis shows the same values. null when the labels aren't one number
+    // each with the same prefix and suffix, or the affix can't be quoted in a format code.
+    function tickAffix(scale) {
+      const ticks = scale.ticks || [];
+      if (!ticks.length) return { pre: "", suf: "", decimals: 0 };
+      const split = (label) => {
+        const m = /[-+]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)/.exec(label);
+        return m ? { pre: label.slice(0, m.index), core: m[0], suf: label.slice(m.index + m[0].length) } : null;
+      };
+      const first = split(String(ticks[0].label));
+      if (!first || /["\\]/.test(first.pre + first.suf)) return null;
+      const plain = ticks.every((t) => {
+        const part = split(String(t.label));
+        const n = part && Number(part.core.replace(/,/g, ""));
+        return part && part.pre === first.pre && part.suf === first.suf && Number.isFinite(n) && Math.abs(n - t.value) <= 1e-6 * Math.max(1, Math.abs(t.value));
+      });
+      if (!plain) return null;
+      const digits = new Set(ticks.map((t) => (split(String(t.label)).core.split(".")[1] || "").length));
+      return { pre: first.pre, suf: first.suf, decimals: digits.size === 1 ? [...digits][0] : 0 };
     }
 
-    function chartSpec(chart) {
-      const o = chart.options || {};
-      const horizontal = o.indexAxis === "y";
-      const scales = o.scales || {};
-      const valScale = scales[horizontal ? "x" : "y"] || {};
-      const catScale = scales[horizontal ? "y" : "x"] || {};
-      const legend = (o.plugins && o.plugins.legend) || {};
-      const datasets = [...(chart.data.datasets || [])].filter((d) => !d.hidden);
-      const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
-      const value = (v) => (v == null ? null : typeof v === "object" ? num(horizontal ? v.x : v.y) : num(Number(v)));
-      const datasetColor = (c) => (typeof c === "string" ? parseColor(c) : Array.isArray(c) && typeof c[0] === "string" ? parseColor(c[0]) : null);
+    // The visible datasets and the scales a bar chart is drawn on, found through the datasets' own
+    // scales (else by axis letter) - Chart.js scale ids are whatever the options named them. Every
+    // value scale that is drawn counts, used by a dataset or not.
+    function chartParts(chart) {
+      const horizontal = (chart.options || {}).indexAxis === "y";
+      const datasets = chart.data.datasets || [];
+      const visible = datasets.map((d, i) => i).filter((i) => chart.isDatasetVisible(i));
+      const metas = visible.map((i) => chart.getDatasetMeta(i));
+      const scales = Object.values(chart.scales || {});
+      const byAxis = (axis) => scales.find((s) => s.axis === axis);
+      const used = metas.map((m) => m.vScale).filter(Boolean);
+      const valueAxis = horizontal ? "x" : "y";
+      const valueScales = new Set([...used, ...scales.filter((s) => s.axis === valueAxis && s.options.display !== false)]);
       return {
-        type: horizontal ? "bar" : "column",
-        categories: Array.from(chart.data.labels || [], (l) => String(l)),
-        series: datasets.map((d) => ({ name: String(d.label ?? ""), values: Array.from(d.data || [], value), color: datasetColor(d.backgroundColor) })),
-        min: num(valScale.min),
-        max: num(valScale.max),
-        stacked: !!(valScale.stacked || catScale.stacked),
-        legend: legend.display !== false && datasets.length > 0,
-        legendPos: { top: "t", bottom: "b", left: "l", right: "r" }[legend.position] || "t",
-        numFmt: tickFormat(valScale.ticks && valScale.ticks.callback, chart.scales && chart.scales[horizontal ? "x" : "y"]),
-        gridColor: valScale.grid && valScale.grid.display === false ? null : parseColor((valScale.grid && valScale.grid.color) || "rgba(0, 0, 0, 0.1)"),
-        labelColor: parseColor((valScale.ticks && valScale.ticks.color) || (catScale.ticks && catScale.ticks.color) || "#666666"),
-        legendColor: parseColor((legend.labels && legend.labels.color) || "#666666"),
+        horizontal,
+        datasets,
+        visible,
+        valueScales,
+        valScale: used[0] || byAxis(valueAxis),
+        catScale: (metas[0] && metas[0].iScale) || byAxis(horizontal ? "y" : "x"),
       };
     }
 
-    function chartNode(canvasEl, rc, op) {
+    // Why this chart can't be a native one without changing what it shows (null when it can).
+    // The canvas is then exported as a picture, with `chart <reason>` as the notice's reason.
+    function unsupportedChart(chart, parts) {
+      const { datasets, visible, valueScales, valScale, catScale } = parts;
+      const type = chart.config && chart.config.type;
+      if (type !== "bar") return `type ${type}`;
+      if (datasets.some((d) => d.type && d.type !== "bar")) return "mixed chart types";
+      if (!visible.length) return "no visible datasets";
+      const shown = visible.map((i) => datasets[i]);
+      const custom = (p) => p !== undefined && p !== true;
+      if (custom((chart.options || {}).parsing) || shown.some((d) => custom(d.parsing))) return "custom parsing";
+      const plain = (v) => v == null || typeof v === "number" || (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)));
+      if (shown.some((d) => !Array.isArray(d.data) || !d.data.every(plain))) return "data format";
+      if (!valScale || !catScale) return "axes";
+      if (valScale.type !== "linear") return "value axis type";
+      if (catScale.type !== "category") return "category axis type";
+      if (valueScales.size > 1) return "second value axis";
+      const sv = valScale.options.stacked;
+      const sc = catScale.options.stacked;
+      // Stacked bars are one stack: both axes stacked, no `stack` names splitting them. A dataset
+      // that names a stack without `stacked` set is stacked by Chart.js too.
+      if (typeof sv === "string" || typeof sc === "string" || !!sv !== !!sc) return "stack groups";
+      if (sv && new Set(shown.map((d) => d.stack)).size > 1) return "stack groups";
+      if (sv === undefined && sc === undefined && shown.some((d) => d.stack !== undefined)) return "stack groups";
+      if (catScale.options.display === false) return "hidden category axis";
+      if (valScale.options.reverse || catScale.options.reverse) return "reversed axis";
+      const plugins = (chart.options || {}).plugins || {};
+      if ((plugins.title && plugins.title.display) || (plugins.subtitle && plugins.subtitle.display)) return "title";
+      for (const d of shown) {
+        const c = d.backgroundColor;
+        if (typeof c === "function" || (c && typeof c === "object" && !Array.isArray(c))) return "scripted colors";
+        if (Array.isArray(c)) {
+          if (c.some((x) => typeof x !== "string")) return "scripted colors";
+          if (new Set(c.map((x) => JSON.stringify(parseColor(x)))).size > 1) return "per-bar colors";
+        }
+      }
+      if (valScale.options.display !== false && !tickAffix(valScale)) return "tick labels";
+      return null;
+    }
+
+    function chartSpec(chart, parts) {
+      const { horizontal, datasets, visible, valScale, catScale } = parts;
+      const vo = valScale.options;
+      const o = chart.options || {};
+      const legend = (o.plugins && o.plugins.legend) || {};
+      const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+      const css = (v, fallback) => parseColor(typeof v === "string" && v ? v : fallback);
+      // A bar chart's value axis begins at zero unless the options say otherwise; a suggested
+      // bound is where the drawn axis actually ended up.
+      const bound = (key, suggested, drawn) => {
+        const explicit = num(vo[key]);
+        if (explicit !== null) return explicit;
+        return num(vo[suggested]) !== null ? num(drawn) : null;
+      };
+      const min = bound("min", "suggestedMin", valScale.min);
+      const shown = vo.display !== false;
+      const affix = shown ? tickAffix(valScale) : null;
+      const grid = vo.grid || {};
+      const seriesColor = (i) => {
+        const c = datasets[i].backgroundColor;
+        const given = Array.isArray(c) ? c[0] : c;
+        if (typeof given === "string") return parseColor(given);
+        // Nothing set: whatever Chart.js drew with (its default, or the Colors plugin's pick).
+        try {
+          const drawn = chart.getDatasetMeta(i).controller.getStyle(0).backgroundColor;
+          return typeof drawn === "string" ? parseColor(drawn) : null;
+        } catch {
+          return null;
+        }
+      };
+      const tick = (s) => s.options.ticks && s.options.ticks.color;
+      const q = (s) => (s ? `"${s}"` : "");
+      return {
+        type: horizontal ? "bar" : "column",
+        categories: Array.from(catScale.getLabels(), (l) => String(l)),
+        series: visible.map((i) => ({ name: String(datasets[i].label ?? ""), values: Array.from(datasets[i].data, (v) => (v == null ? null : num(Number(v)))), color: seriesColor(i) })),
+        min: min !== null ? min : valScale.min === 0 ? 0 : null,
+        max: bound("max", "suggestedMax", valScale.max),
+        stacked: !!vo.stacked,
+        valueAxis: shown,
+        legend: legend.display !== false && visible.length > 0,
+        legendPos: { top: "t", bottom: "b", left: "l", right: "r" }[legend.position] || "t",
+        numFmt: affix && (affix.pre || affix.suf || affix.decimals) ? `${q(affix.pre)}0${affix.decimals ? `.${"0".repeat(affix.decimals)}` : ""}${q(affix.suf)}` : null,
+        gridColor: !shown || grid.display === false || grid.drawOnChartArea === false ? null : css(grid.color, "rgba(0, 0, 0, 0.1)"),
+        labelColor: css(tick(valScale) || tick(catScale), "#666666"),
+        legendColor: css(legend.labels && legend.labels.color, "#666666"),
+      };
+    }
+
+    // A canvas is a native chart when it holds a Chart.js bar chart that can be drawn faithfully,
+    // else a picture (with the reason).
+    function chartNode(canvasEl, cs, rc, box, rotate, op) {
       if (!onCanvas(rc)) return;
       const found = findChart(canvasEl);
-      const type = found && found.chart.config ? found.chart.config.type : null;
-      if (!found || type !== "bar") {
-        nodes.push({ kind: "raster", id: mark(canvasEl), rect: rc, reason: found ? `chart type ${type}` : "canvas", label: labelOf(canvasEl), alt: canvasEl.getAttribute("aria-label") || "" });
-        return;
+      const picture = (reason) =>
+        nodes.push({ kind: "raster", id: mark(canvasEl), rect: rc, reason, label: labelOf(canvasEl), alt: canvasEl.getAttribute("aria-label") || "" });
+      if (!found) return picture("canvas");
+      let spec = null;
+      try {
+        const parts = chartParts(found.chart);
+        const why = unsupportedChart(found.chart, parts);
+        if (why) return picture(`chart ${why}`);
+        if (rotate) return picture("rotated chart");
+        if (op < 0.999) return picture("chart opacity");
+        spec = chartSpec(found.chart, parts);
+      } catch {
+        return picture("chart unreadable");
       }
-      nodes.push({ kind: "chart", id: mark(canvasEl), rect: rc, components: found.components, chart: chartSpec(found.chart), opacity: op });
+      // The chart is drawn inside the canvas's content box; a background, border or shadow on the
+      // canvas itself is its own box.
+      boxNode(canvasEl, cs, box, rotate, op);
+      nodes.push({ kind: "chart", id: nextId++, rect: contentBox(canvasEl, cs, box), components: found.components, chart: spec, opacity: op });
     }
 
     function walk(el, opacity) {
@@ -825,7 +930,7 @@
         return;
       }
       if (tag === "canvas") {
-        chartNode(el, rc, op);
+        chartNode(el, cs, rc, box, rotate, op);
         return;
       }
       if (tag === "table") {

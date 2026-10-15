@@ -18,14 +18,12 @@ const UNUSED_KEYS = ["logo", "eyebrowClass", "cssVarColors"];
 function resolveChart(node, config, S) {
   const name = node.components.find((n) => typeof config.chartResolvers?.[n] === "function");
   if (!name) return;
-  let resolved = null;
   try {
-    resolved = config.chartResolvers[name](config.resolvedDataDir);
+    const resolved = config.chartResolvers[name](config.resolvedDataDir);
+    if (resolved && resolved.kind === "barchart") node.resolvedChart = groupedBarChart(resolved, S);
   } catch (err) {
     console.warn(`Warning: chart resolver ${name} failed (${err.message}) - using the chart drawn on the page.`);
-    return;
   }
-  if (resolved && resolved.kind === "barchart") node.resolvedChart = groupedBarChart(resolved, S);
 }
 
 export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, codeStore, screenshots = false, deps = {} }) {

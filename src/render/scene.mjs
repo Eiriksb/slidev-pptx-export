@@ -3,6 +3,7 @@
 // mapping rule is unit-tested with hand-written scenes.
 
 import { toColor } from "../colors.mjs";
+import { PALETTE } from "../layout.mjs";
 
 const ALIGN = { left: "l", start: "l", center: "ctr", right: "r", end: "r", justify: "just" };
 
@@ -208,20 +209,25 @@ function codeShape(node, u, style) {
   return { kind: "text", ...u.box(node.rect), geometry: "rect", anchor: "t", inset: 0, wrap: false, paras };
 }
 
-const PALETTE = ["accent1", "accent2", "accent5", "accent6", "accent3"];
-
 function chartShape(node, u, style) {
   if (node.resolvedChart) return { kind: "chart", ...u.box(node.rect), chart: node.resolvedChart };
   const c = node.chart;
   const color = (col, fallback) => (col ? colorOf(col, style) : fallback);
   const chart = {
     type: c.type, categories: c.categories,
-    series: c.series.map((s, j) => ({ name: s.name, values: s.values.map((v) => (typeof v === "number" ? v : NaN)), color: color(s.color, PALETTE[j % PALETTE.length]) })),
-    valueAxis: true, legend: c.legend, legendPos: c.legendPos, stacked: c.stacked, gapWidth: 60, background: null,
+    series: c.series.map((s, j) => {
+      const series = { name: s.name, values: s.values.map((v) => (typeof v === "number" ? v : NaN)), color: color(s.color, PALETTE[j % PALETTE.length]) };
+      const a = s.color ? alphaOf(s.color) : undefined;
+      if (a !== undefined) series.alpha = a;
+      return series;
+    }),
+    valueAxis: c.valueAxis !== false, legend: c.legend, legendPos: c.legendPos, stacked: c.stacked, gapWidth: 60, background: null,
     catLabelColor: color(c.labelColor, "dk1"), catLabelSize: u.pt(12),
     valLabelColor: color(c.labelColor, "accent3"), valLabelSize: u.pt(12),
     legendColor: color(c.legendColor, "dk1"), legendSize: u.pt(12),
   };
+  // Chart.js plots a horizontal chart's first category at the top; the chart part plots it at the bottom.
+  if (c.type === "bar") chart.reverseCategories = true;
   if (c.min != null) chart.min = c.min;
   if (c.max != null) chart.max = c.max;
   if (c.numFmt) chart.numFmt = c.numFmt;

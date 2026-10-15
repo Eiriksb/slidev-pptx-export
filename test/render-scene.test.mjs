@@ -222,3 +222,21 @@ test("chart nodes become native charts; uncolored series take the palette; a res
   const resolved = { type: "column", categories: ["A"], series: [] };
   assert.equal(sceneToSpec(scene([{ ...node, resolvedChart: resolved }]), STYLE).shapes[0].chart, resolved);
 });
+
+test("a horizontal chart lists its categories top-down; a translucent series keeps its alpha; a hidden value axis stays hidden", () => {
+  const node = {
+    kind: "chart", id: 4, rect: { x: 40, y: 200, w: 900, h: 240 }, components: [], opacity: 1,
+    chart: {
+      type: "bar", categories: ["Q1", "Q2"], series: [{ name: "A", values: [22, 31], color: C("1A833B", 0.4) }, { name: "B", values: [1, 2], color: C("9CA3AF") }],
+      min: 0, max: null, stacked: false, valueAxis: false, legend: false, legendPos: "t", numFmt: null, gridColor: null, labelColor: null, legendColor: null,
+    },
+  };
+  const { chart } = sceneToSpec(scene([node]), STYLE).shapes[0];
+  assert.equal(chart.reverseCategories, true);
+  assert.equal(chart.valueAxis, false);
+  assert.deepEqual(chart.series.map((s) => [s.color, s.alpha]), [["accent1", 0.4], ["accent5", undefined]]);
+  assert.ok(!("gridColor" in chart) && !("max" in chart));
+  const column = sceneToSpec(scene([{ ...node, chart: { ...node.chart, type: "column", valueAxis: true } }]), STYLE).shapes[0].chart;
+  assert.ok(!("reverseCategories" in column));
+  assert.equal(column.valueAxis, true);
+});

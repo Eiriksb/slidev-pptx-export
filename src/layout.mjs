@@ -16,7 +16,7 @@ const BODY_PT = 13;
 const TEXT_ONLY = new Set(["paragraph", "bullets", "heading"]);
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif"]);
 // Series colors for resolver datasets/panels that don't name one.
-const PALETTE = ["accent1", "accent2", "accent5", "accent6", "accent3"];
+export const PALETTE = ["accent1", "accent2", "accent5", "accent6", "accent3"];
 
 export function deckStyle(config) {
   const theme = themeColors(config.colors);

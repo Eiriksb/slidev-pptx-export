@@ -71,3 +71,12 @@ test("the innotek table and code block are native", deckOpts, async () => {
   const text = [...slide.matchAll(/<a:t>([^<]*)<\/a:t>/g)].map((m) => m[1]).join("");
   assert.match(text, /const answer = await agent\.ask\(/);
 });
+
+test("ExampleChart is a native, editable chart from the page itself when no resolver is configured", deckOpts, async () => {
+  const { result, z } = await exportInnotek("innotek-chart.pptx", { chartResolvers: {} });
+  assert.equal(result.translatedCharts, 1);
+  const chart = z.text("ppt/charts/chart1.xml");
+  assert.match(chart, /<c:v>Q1<\/c:v>/);
+  assert.match(chart, /<c:numFmt formatCode="0&quot;%&quot;" sourceLinked="0"\/>/);
+  assert.match(chart, /<c:legendPos val="b"\/>/);
+});

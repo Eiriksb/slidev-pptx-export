@@ -109,3 +109,17 @@ test("screenshots line up with the specs: a slide's own capture, null for markdo
   assert.equal(result.specs.length, 2);
   assert.deepEqual(result.screenshots, [shot, null]);
 });
+
+test("a chartResolvers entry for the chart's component replaces the captured data", async () => {
+  const chartNode = {
+    kind: "chart", id: 1, rect: { x: 40, y: 200, w: 900, h: 240 }, components: ["ExampleChart"], opacity: 1,
+    chart: { type: "column", categories: ["Q1"], series: [{ name: "Page", values: [1], color: null }], min: null, max: null, stacked: false, legend: true, legendPos: "b", numFmt: null, gridColor: null, labelColor: null, legendColor: null },
+  };
+  const userConfig = { chartResolvers: { ExampleChart: () => ({ kind: "barchart", labels: ["From", "File"], datasets: [{ name: "Resolved", color: "1A833B", data: [5, 6] }], min: 0, max: 10 }) } };
+  const { args } = setup("# A\n", { userConfig, slides: [scene(1, 0, "A", [chartNode])] });
+  const { result } = await withWarnings(() => renderSpecs(args));
+  const chart = result.specs[0].shapes.find((s) => s.kind === "chart").chart;
+  assert.deepEqual(chart.categories, ["From", "File"]);
+  assert.deepEqual(chart.series.map((s) => s.name), ["Resolved"]);
+  assert.equal(result.translatedCharts, 1);
+});

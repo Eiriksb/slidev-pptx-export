@@ -335,19 +335,22 @@ function barPanelShapes(resolved, { x, y, w, h }, S) {
   return shapes;
 }
 
-// barchart: one native clustered column chart.
-function groupedBarShape(resolved, box, S) {
+// A "barchart" resolver result as a native chart spec (also used by render mode, where a
+// resolver overrides the chart captured from the page).
+export function groupedBarChart(resolved, S) {
   const { color } = S;
   return {
-    kind: "chart", ...box,
-    chart: {
-      type: "column", categories: resolved.labels.map(String),
-      series: resolved.datasets.map((d, j) => ({ name: String(d.name), color: resolverColor(S, d.color, PALETTE[j % PALETTE.length]), values: d.data.map(Number) })),
-      min: resolved.min, max: resolved.max, valueAxis: true, legend: true, gapWidth: 45, overlap: -6,
-      dataLabels: { color: color.text, size: 10 }, background: "lt1",
-      catLabelColor: color.text, catLabelSize: 11, valLabelColor: color.muted, valLabelSize: 9, legendColor: color.text, legendSize: 11,
-    },
+    type: "column", categories: resolved.labels.map(String),
+    series: resolved.datasets.map((d, j) => ({ name: String(d.name), color: resolverColor(S, d.color, PALETTE[j % PALETTE.length]), values: d.data.map(Number) })),
+    min: resolved.min, max: resolved.max, valueAxis: true, legend: true, gapWidth: 45, overlap: -6,
+    dataLabels: { color: color.text, size: 10 }, background: "lt1",
+    catLabelColor: color.text, catLabelSize: 11, valLabelColor: color.muted, valLabelSize: 9, legendColor: color.text, legendSize: 11,
   };
+}
+
+// barchart: one native clustered column chart.
+function groupedBarShape(resolved, box, S) {
+  return { kind: "chart", ...box, chart: groupedBarChart(resolved, S) };
 }
 
 function chartShapes(block, box, textSize, S) {

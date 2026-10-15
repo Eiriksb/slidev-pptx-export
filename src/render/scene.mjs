@@ -208,6 +208,31 @@ function codeShape(node, u, style) {
   return { kind: "text", ...u.box(node.rect), geometry: "rect", anchor: "t", inset: 0, wrap: false, paras };
 }
 
+const PALETTE = ["accent1", "accent2", "accent5", "accent6", "accent3"];
+
+function chartShape(node, u, style) {
+  if (node.resolvedChart) return { kind: "chart", ...u.box(node.rect), chart: node.resolvedChart };
+  const c = node.chart;
+  const color = (col, fallback) => (col ? colorOf(col, style) : fallback);
+  const chart = {
+    type: c.type, categories: c.categories,
+    series: c.series.map((s, j) => ({ name: s.name, values: s.values.map((v) => (typeof v === "number" ? v : NaN)), color: color(s.color, PALETTE[j % PALETTE.length]) })),
+    valueAxis: true, legend: c.legend, legendPos: c.legendPos, stacked: c.stacked, gapWidth: 60, background: null,
+    catLabelColor: color(c.labelColor, "dk1"), catLabelSize: u.pt(12),
+    valLabelColor: color(c.labelColor, "accent3"), valLabelSize: u.pt(12),
+    legendColor: color(c.legendColor, "dk1"), legendSize: u.pt(12),
+  };
+  if (c.min != null) chart.min = c.min;
+  if (c.max != null) chart.max = c.max;
+  if (c.numFmt) chart.numFmt = c.numFmt;
+  if (c.gridColor) {
+    chart.gridColor = colorOf(c.gridColor, style);
+    const a = alphaOf(c.gridColor);
+    if (a !== undefined) chart.gridAlpha = a;
+  }
+  return { kind: "chart", ...u.box(node.rect), chart };
+}
+
 export function shapesOf(node, u, style) {
   switch (node.kind) {
     case "text":
@@ -218,6 +243,8 @@ export function shapesOf(node, u, style) {
       return [tableShape(node, u, style)];
     case "code":
       return [codeShape(node, u, style)];
+    case "chart":
+      return [chartShape(node, u, style)];
     case "box":
       return boxShapes(node, u, style);
     case "image":

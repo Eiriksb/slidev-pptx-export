@@ -273,3 +273,41 @@ test("a column no cell starts in shares the gap, and an empty cell still gets a 
   assert.ok(Math.abs(t.colW[0] - t.colW[1]) < 0.1, "the two spanned columns split evenly");
   assert.deepEqual([t.rows[1][0].runs, t.rows[1][0].lineHeight], [[], 12]);
 });
+
+test("a Chart.js bar chart becomes a chart node with its data, colors, axis range, legend and tick format; other canvases stay pictures", opts, async () => {
+  const setup = () => {
+    const [bar, pie] = document.querySelectorAll("canvas");
+    const chart = (canvas, type) => ({
+      canvas, config: { type },
+      data: {
+        labels: ["Q1", "Q2"],
+        datasets: [
+          { label: "Before", data: [22, 31], backgroundColor: "#9CA3AF" },
+          { label: "After", data: [41, null], backgroundColor: ["#1A833B", "#000000"] },
+          { label: "Hidden", data: [1, 2], hidden: true },
+        ],
+      },
+      options: {
+        scales: { y: { min: 0, max: 100, ticks: { color: "#5b6b63", callback: (v) => v + "%" }, grid: { color: "rgba(20, 24, 26, 0.1)" } }, x: { grid: { display: false } } },
+        plugins: { legend: { position: "bottom", labels: { color: "#1f2937" } } },
+      },
+      scales: { y: {} },
+    });
+    bar.__vueParentComponent = { type: {}, exposed: { chart: { value: chart(bar, "bar") } }, parent: { type: { __name: "ExampleChart" }, parent: null } };
+    pie.__vueParentComponent = { type: {}, exposed: { chart: { value: chart(pie, "pie") } }, parent: null };
+  };
+  const s = await extractHtml(browser,
+    '<canvas width="400" height="200" style="display:block"></canvas><canvas width="100" height="100" style="display:block"></canvas><canvas width="50" height="50" style="display:block"></canvas>',
+    { setup });
+  const [bar, pie, plain] = s.nodes;
+  assert.equal(bar.kind, "chart");
+  assert.deepEqual(bar.components, ["ExampleChart"]);
+  assert.deepEqual(bar.chart, {
+    type: "column", categories: ["Q1", "Q2"],
+    series: [{ name: "Before", values: [22, 31], color: { hex: "9CA3AF", alpha: 1 } }, { name: "After", values: [41, null], color: { hex: "1A833B", alpha: 1 } }],
+    min: 0, max: 100, stacked: false, legend: true, legendPos: "b", numFmt: '0"%"',
+    gridColor: { hex: "14181A", alpha: 0.1 }, labelColor: { hex: "5B6B63", alpha: 1 }, legendColor: { hex: "1F2937", alpha: 1 },
+  });
+  assert.deepEqual([pie.kind, pie.reason], ["raster", "chart type pie"]);
+  assert.deepEqual([plain.kind, plain.reason], ["raster", "canvas"]);
+});

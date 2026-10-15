@@ -199,3 +199,26 @@ test("table cells carry row spans, bottom anchors and the node's opacity on fill
   assert.equal(b.paras[0].runs[0].alpha, 0.5);
   assert.deepEqual(t.rows[1][0], { paras: [], hMerge: false, vMerge: true });
 });
+
+test("chart nodes become native charts; uncolored series take the palette; a resolver's chart wins", async () => {
+  const node = {
+    kind: "chart", id: 3, rect: { x: 40, y: 200, w: 900, h: 240 }, components: ["ExampleChart"], opacity: 1,
+    chart: {
+      type: "column", categories: ["Q1", "Q2"],
+      series: [{ name: "Before", values: [22, null], color: C("9CA3AF") }, { name: "After", values: [41, 56], color: null }],
+      min: 0, max: 100, stacked: false, legend: true, legendPos: "b", numFmt: '0"%"', gridColor: C("14181A", 0.1), labelColor: C("5B6B63"), legendColor: C("1F2937"),
+    },
+  };
+  const [shape] = sceneToSpec(scene([node]), STYLE).shapes;
+  assert.deepEqual({ kind: shape.kind, x: shape.x, y: shape.y, w: shape.w, h: shape.h }, { kind: "chart", ...box(node.rect) });
+  const c = shape.chart;
+  assert.deepEqual(c.series.map((s) => [s.name, s.color]), [["Before", "accent5"], ["After", "accent2"]]);
+  assert.ok(Number.isNaN(c.series[0].values[1]));
+  assert.deepEqual(
+    { min: c.min, max: c.max, numFmt: c.numFmt, legendPos: c.legendPos, gridColor: c.gridColor, gridAlpha: c.gridAlpha, background: c.background },
+    { min: 0, max: 100, numFmt: '0"%"', legendPos: "b", gridColor: "#14181A", gridAlpha: 0.1, background: null },
+  );
+  assert.deepEqual(await lintPackage(await writePptx([sceneToSpec(scene([node]), STYLE)], { ...DECK, logo: null })), []);
+  const resolved = { type: "column", categories: ["A"], series: [] };
+  assert.equal(sceneToSpec(scene([{ ...node, resolvedChart: resolved }]), STYLE).shapes[0].chart, resolved);
+});

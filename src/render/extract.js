@@ -7,9 +7,9 @@
 // capture.mjs can screenshot exactly that element.
 (() => {
   const SKIP_TAGS = new Set(["script", "style", "noscript", "template", "link", "meta", "head", "title"]);
-  // Drawn as pictures; Task 9 turns Chart.js canvases into native charts.
+  // Drawn as pictures.
   const RASTER_TAGS = {
-    canvas: "canvas", svg: "inline SVG", iframe: "iframe", video: "video", audio: "audio",
+    svg: "inline SVG", iframe: "iframe", video: "video", audio: "audio",
     object: "embedded object", embed: "embedded object", math: "math",
   };
   const REPLACED = new Set(["img", "svg", "canvas", "video", "iframe", "object", "embed", "math", "audio"]);
@@ -713,6 +713,88 @@
       });
     }
 
+    // The Chart.js chart drawn on a canvas: through the Vue component that owns it (vue-chartjs
+    // exposes it as `chart`), else Chart.getChart when Chart.js is a page global.
+    function findChart(canvasEl) {
+      const components = [];
+      let chart = null;
+      let inst = canvasEl.__vueParentComponent || (canvasEl.parentElement && canvasEl.parentElement.__vueParentComponent);
+      for (let i = 0; inst && i < 25; i++, inst = inst.parent) {
+        const name = inst.type && (inst.type.__name || inst.type.name);
+        if (name) components.push(name);
+        for (const src of [inst.exposed, inst.setupState]) {
+          if (chart || !src) continue;
+          let c = null;
+          try {
+            c = src.chart;
+          } catch {
+            c = null;
+          }
+          const v = c && (c.value !== undefined ? c.value : c);
+          if (v && v.config && v.data && v.canvas === canvasEl) chart = v;
+        }
+      }
+      if (!chart && window.Chart && typeof window.Chart.getChart === "function") chart = window.Chart.getChart(canvasEl) || null;
+      return chart ? { chart, components } : null;
+    }
+
+    // An axis tick callback like (v) => v + "%" -> the Excel format 0"%" (null if it isn't a
+    // plain prefix/suffix around the number).
+    function tickFormat(cb, scale) {
+      if (typeof cb !== "function") return null;
+      try {
+        const a = String(cb.call(scale, 12, 0, [{ value: 12 }]));
+        const b = String(cb.call(scale, 34.5, 1, [{ value: 34.5 }]));
+        const i = a.indexOf("12");
+        if (i < 0) return null;
+        const pre = a.slice(0, i);
+        const suf = a.slice(i + 2);
+        if ((!pre && !suf) || b !== `${pre}34.5${suf}` || /["\\]/.test(pre + suf)) return null;
+        const q = (s) => (s ? `"${s}"` : "");
+        return `${q(pre)}0${q(suf)}`;
+      } catch {
+        return null;
+      }
+    }
+
+    function chartSpec(chart) {
+      const o = chart.options || {};
+      const horizontal = o.indexAxis === "y";
+      const scales = o.scales || {};
+      const valScale = scales[horizontal ? "x" : "y"] || {};
+      const catScale = scales[horizontal ? "y" : "x"] || {};
+      const legend = (o.plugins && o.plugins.legend) || {};
+      const datasets = [...(chart.data.datasets || [])].filter((d) => !d.hidden);
+      const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+      const value = (v) => (v == null ? null : typeof v === "object" ? num(horizontal ? v.x : v.y) : num(Number(v)));
+      const datasetColor = (c) => (typeof c === "string" ? parseColor(c) : Array.isArray(c) && typeof c[0] === "string" ? parseColor(c[0]) : null);
+      return {
+        type: horizontal ? "bar" : "column",
+        categories: Array.from(chart.data.labels || [], (l) => String(l)),
+        series: datasets.map((d) => ({ name: String(d.label ?? ""), values: Array.from(d.data || [], value), color: datasetColor(d.backgroundColor) })),
+        min: num(valScale.min),
+        max: num(valScale.max),
+        stacked: !!(valScale.stacked || catScale.stacked),
+        legend: legend.display !== false && datasets.length > 0,
+        legendPos: { top: "t", bottom: "b", left: "l", right: "r" }[legend.position] || "t",
+        numFmt: tickFormat(valScale.ticks && valScale.ticks.callback, chart.scales && chart.scales[horizontal ? "x" : "y"]),
+        gridColor: valScale.grid && valScale.grid.display === false ? null : parseColor((valScale.grid && valScale.grid.color) || "rgba(0, 0, 0, 0.1)"),
+        labelColor: parseColor((valScale.ticks && valScale.ticks.color) || (catScale.ticks && catScale.ticks.color) || "#666666"),
+        legendColor: parseColor((legend.labels && legend.labels.color) || "#666666"),
+      };
+    }
+
+    function chartNode(canvasEl, rc, op) {
+      if (!onCanvas(rc)) return;
+      const found = findChart(canvasEl);
+      const type = found && found.chart.config ? found.chart.config.type : null;
+      if (!found || type !== "bar") {
+        nodes.push({ kind: "raster", id: mark(canvasEl), rect: rc, reason: found ? `chart type ${type}` : "canvas", label: labelOf(canvasEl), alt: canvasEl.getAttribute("aria-label") || "" });
+        return;
+      }
+      nodes.push({ kind: "chart", id: mark(canvasEl), rect: rc, components: found.components, chart: chartSpec(found.chart), opacity: op });
+    }
+
     function walk(el, opacity) {
       const tag = el.localName;
       if (SKIP_TAGS.has(tag)) return;
@@ -740,6 +822,10 @@
       const box = rotate ? unrotatedRect(el, r) : rc;
       if (tag === "img") {
         imageNode(el, cs, box, rotate, op);
+        return;
+      }
+      if (tag === "canvas") {
+        chartNode(el, rc, op);
         return;
       }
       if (tag === "table") {

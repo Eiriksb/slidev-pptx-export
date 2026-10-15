@@ -99,3 +99,16 @@ test("writer adds chart part + embedded workbook and passes lint", async () => {
   assert.match(z.text("[Content_Types].xml"), /<Default Extension="xlsx" ContentType="application\/vnd.openxmlformats-officedocument.spreadsheetml.sheet"\/>/);
   assert.match(z.text("ppt/slides/slide1.xml"), /<a:graphicData uri="http:\/\/schemas.openxmlformats.org\/drawingml\/2006\/chart"><c:chart xmlns:c="[^"]+" r:id="rId2"\/>/);
 });
+
+test("render-mode chart options: number format, legend position, stacking, gridlines and a transparent background", async () => {
+  const spec = { ...SPEC, numFmt: '0"%"', legendPos: "t", stacked: true, gridColor: "#14181A", gridAlpha: 0.1, background: null };
+  const xml = chartXml(spec, { lang: "en-US", workbookRId: "rId1" });
+  assert.match(xml, /<c:grouping val="stacked"\/>/);
+  assert.match(xml, /<c:gapWidth val="45"\/><c:overlap val="100"\/>/);
+  assert.match(xml, /<c:axPos val="l"\/><c:majorGridlines><c:spPr><a:ln w="9525"><a:solidFill><a:srgbClr val="14181A"><a:alpha val="10000"\/><\/a:srgbClr><\/a:solidFill><\/a:ln><\/c:spPr><\/c:majorGridlines><c:numFmt formatCode="0&quot;%&quot;" sourceLinked="0"\/>/);
+  assert.match(xml, /<c:formatCode>0&quot;%&quot;<\/c:formatCode>/);
+  assert.match(xml, /<c:legendPos val="t"\/>/);
+  assert.match(xml, /<c:spPr><a:noFill\/><a:ln><a:noFill\/><\/a:ln><\/c:spPr><\/c:plotArea>/);
+  const buffer = await writePptx([{ layout: "blank", shapes: [{ kind: "chart", x: 1, y: 1, w: 6, h: 3, chart: spec }] }], DECK);
+  assert.deepEqual(await lintPackage(buffer), []);
+});

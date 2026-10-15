@@ -7,10 +7,26 @@ import { startDeckServer } from "./server.mjs";
 import { loadChromium } from "./browser.mjs";
 import { captureDeck } from "./capture.mjs";
 import { sceneToSpec } from "./scene.mjs";
-import { deckStyle, layoutEach } from "../layout.mjs";
+import { deckStyle, layoutEach, groupedBarChart } from "../layout.mjs";
 
 // Config keys that only restate what the page shows; render mode reads the page instead.
 const UNUSED_KEYS = ["logo", "eyebrowClass", "cssVarColors"];
+
+// A chartResolvers entry for the chart's Vue component (or any component around it) overrides
+// the data captured from the page - but only a "barchart"; other resolver kinds describe HTML
+// the page already renders.
+function resolveChart(node, config, S) {
+  const name = node.components.find((n) => typeof config.chartResolvers?.[n] === "function");
+  if (!name) return;
+  let resolved = null;
+  try {
+    resolved = config.chartResolvers[name](config.resolvedDataDir);
+  } catch (err) {
+    console.warn(`Warning: chart resolver ${name} failed (${err.message}) - using the chart drawn on the page.`);
+    return;
+  }
+  if (resolved && resolved.kind === "barchart") node.resolvedChart = groupedBarChart(resolved, S);
+}
 
 export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, codeStore, screenshots = false, deps = {} }) {
   const { start = startDeckServer, chromiumFor = loadChromium, capture = captureDeck } = deps;
@@ -56,6 +72,7 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
       continue;
     }
     for (const node of scene.nodes) {
+      if (node.kind === "chart") resolveChart(node, config, style);
       if (node.kind === "raster") console.warn(`Notice: slide ${no}: ${node.label} exported as a picture (${node.reason}).`);
       if (node.kind === "missing") console.warn(`Notice: slide ${no}: image ${node.src} didn't load - skipped.`);
     }

@@ -51,7 +51,7 @@ export function chartXml(spec, { lang, workbookRId }) {
         `<c:tx><c:strRef><c:f>Sheet1!$${col}$1</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>${esc(s.name)}</c:v></c:pt></c:strCache></c:strRef></c:tx>` +
         `<c:spPr>${solidFill(s.color)}<a:ln><a:noFill/></a:ln></c:spPr><c:invertIfNegative val="0"/>${dLbls}` +
         `<c:cat><c:strRef><c:f>Sheet1!$A$2:$A$${n + 1}</c:f>${catCache}</c:strRef></c:cat>` +
-        `<c:val><c:numRef><c:f>Sheet1!$${col}$2:$${col}$${n + 1}</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${n}"/>${pts}</c:numCache></c:numRef></c:val>` +
+        `<c:val><c:numRef><c:f>Sheet1!$${col}$2:$${col}$${n + 1}</c:f><c:numCache><c:formatCode>${esc(spec.numFmt || "General")}</c:formatCode><c:ptCount val="${n}"/>${pts}</c:numCache></c:numRef></c:val>` +
         "</c:ser>"
       );
     })
@@ -62,27 +62,31 @@ export function chartXml(spec, { lang, workbookRId }) {
   const scaling =
     '<c:scaling><c:orientation val="minMax"/>' +
     `${Number.isFinite(spec.max) ? `<c:max val="${spec.max}"/>` : ""}${Number.isFinite(spec.min) ? `<c:min val="${spec.min}"/>` : ""}</c:scaling>`;
-  const ticks = '<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/>';
+  const tickMarks = '<c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/>';
+  const ticks = `<c:numFmt formatCode="General" sourceLinked="1"/>${tickMarks}`;
+  const valTicks = spec.numFmt ? `<c:numFmt formatCode="${esc(spec.numFmt)}" sourceLinked="0"/>${tickMarks}` : ticks;
+  // CT_ValAx: majorGridlines sits between axPos and numFmt.
+  const grid = spec.gridColor ? `<c:majorGridlines><c:spPr><a:ln w="9525">${solidFill(spec.gridColor, spec.gridAlpha)}</a:ln></c:spPr></c:majorGridlines>` : "";
   const catAx =
     `<c:catAx><c:axId val="${CAT_AX}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/>` +
     `<c:axPos val="${horizontal ? "l" : "b"}"/>${ticks}${NO_LINE}${txPr(spec.catLabelSize, spec.catLabelColor, lang)}` +
     `<c:crossAx val="${VAL_AX}"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx>`;
-  // No c:majorGridlines element = no gridlines.
+  // No gridColor = no c:majorGridlines element = no gridlines.
   const valAx =
     `<c:valAx><c:axId val="${VAL_AX}"/>${scaling}<c:delete val="${spec.valueAxis ? 0 : 1}"/>` +
-    `<c:axPos val="${horizontal ? "b" : "l"}"/>${ticks}${NO_LINE}${txPr(spec.valLabelSize ?? 9, spec.valLabelColor ?? "accent3", lang)}` +
+    `<c:axPos val="${horizontal ? "b" : "l"}"/>${grid}${valTicks}${NO_LINE}${txPr(spec.valLabelSize ?? 9, spec.valLabelColor ?? "accent3", lang)}` +
     `<c:crossAx val="${CAT_AX}"/><c:crosses val="autoZero"/><c:crossBetween val="between"/></c:valAx>`;
   const legend = spec.legend
-    ? `<c:legend><c:legendPos val="b"/><c:overlay val="0"/>${txPr(spec.legendSize ?? 11, spec.legendColor ?? "dk1", lang)}</c:legend>`
+    ? `<c:legend><c:legendPos val="${spec.legendPos || "b"}"/><c:overlay val="0"/>${txPr(spec.legendSize ?? 11, spec.legendColor ?? "dk1", lang)}</c:legend>`
     : "";
-  const background = `<c:spPr>${solidFill(spec.background)}<a:ln><a:noFill/></a:ln></c:spPr>`;
-  const overlap = spec.overlap != null ? `<c:overlap val="${spec.overlap}"/>` : "";
+  const background = `<c:spPr>${spec.background ? solidFill(spec.background) : "<a:noFill/>"}<a:ln><a:noFill/></a:ln></c:spPr>`;
+  const overlap = spec.stacked ? '<c:overlap val="100"/>' : spec.overlap != null ? `<c:overlap val="${spec.overlap}"/>` : "";
 
   return (
     `${XML_DECL}<c:chartSpace xmlns:c="${NS.c}" xmlns:a="${NS.a}" xmlns:r="${NS.r}">` +
     '<c:date1904 val="0"/><c:roundedCorners val="0"/>' +
     '<c:chart><c:autoTitleDeleted val="1"/><c:plotArea><c:layout/>' +
-    `<c:barChart><c:barDir val="${horizontal ? "bar" : "col"}"/><c:grouping val="clustered"/><c:varyColors val="0"/>${series}` +
+    `<c:barChart><c:barDir val="${horizontal ? "bar" : "col"}"/><c:grouping val="${spec.stacked ? "stacked" : "clustered"}"/><c:varyColors val="0"/>${series}` +
     `<c:gapWidth val="${spec.gapWidth ?? 100}"/>${overlap}<c:axId val="${CAT_AX}"/><c:axId val="${VAL_AX}"/></c:barChart>` +
     `${catAx}${valAx}${background}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>` +
     `${background}<c:externalData r:id="${workbookRId}"><c:autoUpdate val="0"/></c:externalData></c:chartSpace>`

@@ -60,3 +60,22 @@ test("wrap: false on a free text shape writes wrap=\"none\"", () => {
   const xml = shapeXml({ x: 0, y: 0, w: 1, h: 1, wrap: false, paras: [{ runs: [{ text: "x" }] }] }, 5, ctx);
   assert.match(xml, /<a:bodyPr wrap="none" anchor="t" rtlCol="0"\/>/);
 });
+
+test("shape fill and outline alpha, a measured shadow and a rotation", () => {
+  const xml = shapeXml({
+    x: 1, y: 1, w: 2, h: 1, rot: -90, fill: "lt2", fillAlpha: 0.5,
+    line: { width: 1, color: "#D9E3DB", alpha: 0.4 },
+    shadow: { blur: 0.1, dist: 0.05, dir: 90, color: "#14181A", alpha: 0.14 }, paras: [],
+  }, 3, ctx);
+  assert.match(xml, /<a:xfrm rot="16200000">/);
+  assert.match(xml, /<a:solidFill><a:schemeClr val="bg2"><a:alpha val="50000"\/><\/a:schemeClr><\/a:solidFill><a:ln w="12700"><a:solidFill><a:srgbClr val="D9E3DB"><a:alpha val="40000"\/><\/a:srgbClr><\/a:solidFill><\/a:ln>/);
+  assert.match(xml, /<a:effectLst><a:outerShdw blurRad="91440" dist="45720" dir="5400000" algn="ctr" rotWithShape="0"><a:srgbClr val="14181A"><a:alpha val="14000"\/><\/a:srgbClr><\/a:outerShdw><\/a:effectLst>/);
+});
+
+test("pictures can be cropped, outlined and shadowed; a plain picture is unchanged", () => {
+  const xml = pictureXml({ id: 4, name: "P", rId: "rId2", box: { x: 0, y: 0, w: 1, h: 1 }, crop: { l: 0.1, t: 0, r: 0.1, b: 0 }, line: { width: 0.75, color: "accent4" }, shadow: true });
+  assert.match(xml, /<a:blip r:embed="rId2"\/><a:srcRect l="10000" r="10000"\/><a:stretch>/);
+  assert.match(xml, /<\/a:prstGeom><a:ln w="9525"><a:solidFill><a:schemeClr val="accent4"\/><\/a:solidFill><\/a:ln><a:effectLst>/);
+  const plain = pictureXml({ id: 4, name: "P", rId: "rId2", box: { x: 0, y: 0, w: 1, h: 1 } });
+  assert.match(plain, /<a:blip r:embed="rId2"\/><a:stretch><a:fillRect\/><\/a:stretch><\/p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"\/><a:ext cx="914400" cy="914400"\/><\/a:xfrm><a:prstGeom prst="rect"><a:avLst\/><\/a:prstGeom><\/p:spPr>/);
+});

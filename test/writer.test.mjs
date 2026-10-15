@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { writePptx } from "../src/ooxml/index.mjs";
@@ -118,4 +119,19 @@ test("unknown layouts and shape kinds are rejected", async () => {
 test("a slide's title placeholder can carry its own body properties", async () => {
   const buffer = await writePptx([{ layout: "titleOnly", placeholders: { title: t("Measured"), titleBox: { x: 1, y: 1, w: 3, h: 0.5 }, titleBody: { wrap: false, inset: 0, anchor: "t" } }, shapes: [] }], DECK);
   assert.match((await unzip(buffer)).text("ppt/slides/slide1.xml"), /<p:ph type="title"\/>[\s\S]*?<a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="t"\/>/);
+});
+
+test("images from buffers share media with file images; slides take solid and picture backgrounds", async () => {
+  const data = readFileSync(PIC);
+  const slides = [
+    { layout: "blank", background: { color: "#FAFAFA" }, shapes: [{ kind: "image", x: 1, y: 1, w: 2, h: 1, path: PIC }, { kind: "image", x: 4, y: 1, w: 2, h: 1, data, ext: "png", crop: { l: 0.25, t: 0, r: 0.25, b: 0 } }] },
+    { layout: "blank", background: { image: { data, ext: "png" } }, shapes: [] },
+  ];
+  const buffer = await writePptx(slides, { ...DECK, logo: null });
+  assert.deepEqual(await lintPackage(buffer), []);
+  const z = await unzip(buffer);
+  assert.deepEqual(z.names.filter((n) => n.startsWith("ppt/media/")), ["ppt/media/image1.png"]);
+  assert.match(z.text("ppt/slides/slide1.xml"), /<p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="FAFAFA"\/><\/a:solidFill><a:effectLst\/><\/p:bgPr><\/p:bg><p:spTree>/);
+  assert.match(z.text("ppt/slides/slide1.xml"), /<a:srcRect l="25000" r="25000"\/>/);
+  assert.match(z.text("ppt/slides/slide2.xml"), /<p:bg><p:bgPr><a:blipFill dpi="0" rotWithShape="1"><a:blip r:embed="rId2"\/><a:srcRect\/><a:stretch><a:fillRect\/><\/a:stretch><\/a:blipFill><a:effectLst\/><\/p:bgPr><\/p:bg>/);
 });

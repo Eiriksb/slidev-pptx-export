@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { Package, REL, CT } from "./package.mjs";
 import { themeXml } from "./theme.mjs";
 import { layoutDefs, layoutXml, masterXml } from "./master.mjs";
-import { placeholderXml, shapeXml, pictureXml, slideXml, graphicFrameXml } from "./shapes.mjs";
+import { placeholderXml, shapeXml, pictureXml, slideXml, graphicFrameXml, backgroundXml } from "./shapes.mjs";
 import { presentationXml, presPropsXml, viewPropsXml, appXml, coreXml } from "./presentation.mjs";
 import { TABLE_URI, tableXml, tableStylesXml } from "./table.mjs";
 import { CHART_URI, chartXml, chartRefXml } from "./chart.mjs";
@@ -27,9 +27,11 @@ class MediaStore {
     this.parts = new Map();
   }
 
-  add(path) {
-    const buf = readFileSync(path);
-    const ext = extname(path).slice(1).toLowerCase().replace("jpeg", "jpg");
+  // `source` is a file path, or { data: Buffer, ext } for bytes captured in render mode.
+  add(source) {
+    const fromFile = typeof source === "string";
+    const buf = fromFile ? readFileSync(source) : source.data;
+    const ext = (fromFile ? extname(source).slice(1) : source.ext).toLowerCase().replace("jpeg", "jpg");
     const key = `${createHash("sha1").update(buf).digest("hex")}.${ext}`;
     if (!this.parts.has(key)) {
       const part = `/ppt/media/image${this.parts.size + 1}.${ext}`;
@@ -46,8 +48,8 @@ async function shapeToXml(shape, id, env) {
     case "text":
       return shapeXml(shape, id, ctx);
     case "image": {
-      const rId = pkg.rel(part, media.add(shape.path), REL.image);
-      return pictureXml({ id, name: `Picture ${id}`, descr: shape.alt, rId, box: shape });
+      const rId = pkg.rel(part, media.add(shape.path ?? { data: shape.data, ext: shape.ext }), REL.image);
+      return pictureXml({ id, name: `Picture ${id}`, descr: shape.alt, rId, box: shape, crop: shape.crop, line: shape.line, shadow: shape.shadow });
     }
     case "table":
       return graphicFrameXml({ id, name: `Table ${id}`, box: shape, uri: TABLE_URI, inner: tableXml(shape, ctx) });
@@ -130,7 +132,10 @@ export async function writePptx(slides, deck) {
     }
     for (const shape of spec.shapes || []) xml += await shapeToXml(shape, nextId++, env);
 
-    pkg.addXml(part, CT.slide, slideXml(xml));
+    let bg = "";
+    if (spec.background?.image) bg = backgroundXml(spec.background, pkg.rel(part, media.add(spec.background.image), REL.image));
+    else if (spec.background?.color) bg = backgroundXml(spec.background);
+    pkg.addXml(part, CT.slide, slideXml(xml, bg));
     if (spec.notes) {
       const notesPart = `/ppt/notesSlides/notesSlide${i + 1}.xml`;
       pkg.addXml(notesPart, CT.notesSlide, notesSlideXml(spec.notes, ctx));

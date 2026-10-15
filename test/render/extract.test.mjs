@@ -127,11 +127,44 @@ test("a rotated text-only element keeps its own box and a rotation; skewed eleme
   assert.deepEqual(s.nodes.filter((n) => n.kind === "raster").map((n) => n.reason), ["transform"]);
 });
 
-test("backgrounds: the layout root's color is the slide background; a gradient asks for a picture background", opts, async () => {
+test("backgrounds: the layout root's color is the slide background; an image background is a picture", opts, async () => {
   assert.deepEqual((await extractHtml(browser, "<p>x</p>", { layoutStyle: "background:#f8fafc" })).background, { color: { hex: "F8FAFC", alpha: 1 } });
-  const g = await extractHtml(browser, "<p>x</p>", { layoutStyle: "background:radial-gradient(#fff, #000)" });
-  assert.deepEqual(g.background, { raster: true, reason: "gradient background" });
+  const g = await extractHtml(browser, "<p>x</p>", { layoutStyle: "background:url(data:image/gif;base64,R0lGODlhAQABAAAAACw=), #fff" });
+  assert.deepEqual(g.background, { raster: true, reason: "background image" });
   assert.equal(g.layout, "default");
+});
+
+test("gradients: a radial glow over a color is a native background gradient; a linear gradient fills a box; layered backgrounds stay pictures", opts, async () => {
+  const glow = await extractHtml(browser, "<p>x</p>", { layoutStyle: "background:radial-gradient(60% 50% at 50% 38%, rgba(26, 131, 59, 0.12) 0%, transparent 70%), #ffffff" });
+  assert.deepEqual(glow.background, {
+    gradient: { type: "radial", cx: 0.5, cy: 0.38, rx: 588, stops: [{ pos: 0, color: { hex: "1A833B", alpha: 0.12 } }, { pos: 0.7, color: { hex: "000000", alpha: 0 } }] },
+    base: { hex: "FFFFFF", alpha: 1 },
+  });
+  const lin = await extractHtml(browser, '<div style="width:100px;height:50px;background:linear-gradient(to right, #ff0000, #0000ff)"></div>');
+  assert.deepEqual(lin.nodes.find((n) => n.kind === "box").fill, {
+    gradient: { type: "linear", angle: 90, stops: [{ pos: 0, color: { hex: "FF0000", alpha: 1 } }, { pos: 1, color: { hex: "0000FF", alpha: 1 } }] },
+    base: null,
+  });
+  const layered = await extractHtml(browser, '<div style="width:100px;height:50px;background:linear-gradient(#f00, #00f), linear-gradient(#0f0, #000)"></div>');
+  assert.deepEqual(layered.nodes.map((n) => [n.kind, n.reason]), [["raster", "background layers"]]);
+});
+
+test("gradient geometry: corners aim across the box, an `at` position alone works, stop positions stay in order; patterns and unsupported forms stay pictures", opts, async () => {
+  const fillOf = async (css, size = "") => {
+    const s = await extractHtml(browser, `<div style="width:200px;height:100px;background:${css};${size}"></div>`);
+    return s.nodes[0].kind === "box" ? s.nodes[0].fill.gradient : s.nodes[0].reason;
+  };
+  assert.equal((await fillOf("linear-gradient(to bottom right, #fff, #00f)")).angle, 153.43);
+  assert.equal((await fillOf("linear-gradient(to left, #fff, #00f)")).angle, 270);
+  const at = await fillOf("radial-gradient(at 30% 40%, #f00, #00f)");
+  assert.deepEqual([at.cx, at.cy], [0.3, 0.4]);
+  const px = await fillOf("linear-gradient(rgba(0,0,0,.5) 10px, transparent 40px)");
+  assert.deepEqual(px.stops.map((x) => x.pos), [0.1, 0.4]);
+  assert.deepEqual((await fillOf("linear-gradient(red 50%, blue 30%)")).stops.map((x) => x.pos), [0.5, 0.5]);
+  for (const css of ["repeating-linear-gradient(red, blue 20px)", "conic-gradient(red, blue)", "linear-gradient(red, 30%, blue)", "linear-gradient(in oklch, red, blue)"]) {
+    assert.equal(await fillOf(css), "gradient", css);
+  }
+  assert.equal(await fillOf("linear-gradient(red, blue)", "background-size:20px 20px"), "gradient");
 });
 
 test("a custom layout without the slidev-layout class still extracts, on white", opts, async () => {

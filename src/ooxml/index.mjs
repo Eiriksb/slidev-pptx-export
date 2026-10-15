@@ -147,7 +147,7 @@ export async function writePptx(slides, deck) {
 
     let bg = "";
     if (spec.background?.image) bg = backgroundXml(spec.background, pkg.rel(part, media.add(spec.background.image), REL.image));
-    else if (spec.background?.color) bg = backgroundXml(spec.background);
+    else if (spec.background?.color || spec.background?.gradient) bg = backgroundXml(spec.background);
     pkg.addXml(part, CT.slide, slideXml(xml, bg));
     if (spec.notes) {
       const notesPart = `/ppt/notesSlides/notesSlide${i + 1}.xml`;

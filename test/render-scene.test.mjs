@@ -240,3 +240,35 @@ test("a horizontal chart lists its categories top-down; a translucent series kee
   assert.ok(!("reverseCategories" in column));
   assert.equal(column.valueAxis, true);
 });
+
+test("gradients: radial backgrounds composite over their base and rescale to the corner radius; linear angles turn into DrawingML's", () => {
+  const bg = {
+    gradient: { type: "radial", cx: 0.5, cy: 0.5, rx: 100, stops: [{ pos: 0, color: C("1A833B", 0.5) }, { pos: 0.5, color: { hex: "000000", alpha: 0 } }] },
+    base: C("FFFFFF"),
+  };
+  const spec = sceneToSpec(scene([], { canvas: { w: 200, h: 200 }, background: bg }), STYLE);
+  assert.deepEqual(spec.background, {
+    gradient: { type: "radial", cx: 0.5, cy: 0.5, stops: [{ pos: 0, color: "#8DC19D" }, { pos: Math.round((50 / Math.hypot(100, 100)) * 10000) / 10000, color: "lt1" }, { pos: 1, color: "lt1" }] },
+  });
+  const node = {
+    kind: "box", rect: { x: 0, y: 0, w: 100, h: 50 }, border: null, sides: null, radius: 0, shadow: null, opacity: 1,
+    fill: { gradient: { type: "linear", angle: 90, stops: [{ pos: 0, color: C("FF0000") }, { pos: 1, color: C("0000FF") }] }, base: null },
+  };
+  const [shape] = sceneToSpec(scene([node]), STYLE).shapes;
+  assert.deepEqual(shape.fill, { type: "linear", angle: 0, stops: [{ pos: 0, color: "#FF0000" }, { pos: 1, color: "#0000FF" }] });
+  assert.equal(shape.fillAlpha, undefined);
+});
+
+test("gradient stops follow the box's opacity and run the full 0..1 range", () => {
+  const node = {
+    kind: "box", rect: { x: 0, y: 0, w: 100, h: 100 }, border: null, sides: null, radius: 0, shadow: null, opacity: 0.5,
+    fill: { gradient: { type: "linear", angle: 180, stops: [{ pos: 0.2, color: C("FF0000") }, { pos: 0.6, color: C("0000FF", 0) }] }, base: null },
+  };
+  const [shape] = sceneToSpec(scene([node]), STYLE).shapes;
+  assert.deepEqual(shape.fill, {
+    type: "linear", angle: 90,
+    stops: [{ pos: 0, color: "#FF0000", alpha: 0.5 }, { pos: 0.2, color: "#FF0000", alpha: 0.5 }, { pos: 0.6, color: "#FF0000", alpha: 0 }, { pos: 1, color: "#FF0000", alpha: 0 }],
+  });
+  const opaque = sceneToSpec(scene([{ ...node, fill: { ...node.fill, base: C("FFFFFF") } }]), STYLE).shapes[0].fill;
+  assert.deepEqual(opaque.stops.map((x) => [x.color, x.alpha]), [["#FF0000", 0.5], ["#FF0000", 0.5], ["lt1", 0.5], ["lt1", 0.5]]);
+});

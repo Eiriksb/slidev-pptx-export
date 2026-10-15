@@ -2,7 +2,7 @@
 // graphic frames (tables, charts). Geometry arrives in inches; ids come from the caller's
 // per-part counter so they stay unique within a slide.
 
-import { XML_DECL, NS_PML, esc, emu, emuSize, solidFill, colorXml } from "./xml.mjs";
+import { XML_DECL, NS_PML, esc, emu, emuSize, solidFill, colorXml, fillXml, gradFillXml } from "./xml.mjs";
 import { txBodyXml } from "./text.mjs";
 
 export const SP_TREE_HEADER =
@@ -73,16 +73,16 @@ export function shapeXml(shape, id, ctx) {
   // spPr child order: xfrm, geometry, fill, ln, effectLst.
   const spPr =
     `<p:spPr>${xfrmXml(shape)}${geometryXml({ ...shape, geometry })}` +
-    `${shape.fill ? solidFill(shape.fill, shape.fillAlpha) : "<a:noFill/>"}${lineXml(shape.line)}${shape.shadow ? shadowXml(shape.shadow) : ""}</p:spPr>`;
+    `${shape.fill ? fillXml(shape.fill, shape.fillAlpha) : "<a:noFill/>"}${lineXml(shape.line)}${shape.shadow ? shadowXml(shape.shadow) : ""}</p:spPr>`;
   const body = txBodyXml(shape.paras || [], ctx, { anchor: shape.anchor || "t", inset: shape.inset, wrap: shape.wrap });
   return `<p:sp>${nvSpPr}${spPr}${body}</p:sp>`;
 }
 
-// Slide background (p:bg): a fill, or a picture (rId) stretched over the slide.
+// Slide background (p:bg): a color, a gradient, or a picture (rId) stretched over the slide.
 export function backgroundXml(bg, rId) {
   const fill = rId
     ? `<a:blipFill dpi="0" rotWithShape="1"><a:blip r:embed="${rId}"/><a:srcRect/><a:stretch><a:fillRect/></a:stretch></a:blipFill>`
-    : solidFill(bg.color, bg.alpha);
+    : bg.gradient ? gradFillXml(bg.gradient) : solidFill(bg.color, bg.alpha);
   return `<p:bg><p:bgPr>${fill}<a:effectLst/></p:bgPr></p:bg>`;
 }
 

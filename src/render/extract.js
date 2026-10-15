@@ -38,10 +38,12 @@
 
   const probe = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
 
-  // Any CSS color -> { hex: "RRGGBB", alpha }, or null when fully transparent. Computed styles
-  // are usually rgb()/rgba(); anything else (oklch(), color()) goes through a 1px canvas.
-  function parseColor(css) {
-    if (!css || css === "transparent" || css === "none") return null;
+  // Any CSS color -> { hex: "RRGGBB", alpha }. Fully transparent -> null, unless keepTransparent
+  // (gradient stops need their position even when invisible). Computed styles are usually
+  // rgb()/rgba(); anything else (oklch(), color()) goes through a 1px canvas.
+  function parseColor(css, keepTransparent = false) {
+    if (!css || css === "none") return null;
+    if (css === "transparent") return keepTransparent ? { hex: "000000", alpha: 0 } : null;
     let r, g, b, a;
     const m = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/.exec(String(css).trim());
     if (m) {
@@ -54,7 +56,7 @@
       const d = probe.getImageData(0, 0, 1, 1).data;
       r = d[0]; g = d[1]; b = d[2]; a = d[3] / 255;
     }
-    if (!(a > 0.001)) return null;
+    if (!(a > 0.001)) return keepTransparent ? { hex: "000000", alpha: 0 } : null;
     const hex = [r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("").toUpperCase();
     return { hex, alpha: Math.round(a * 1000) / 1000 };
   }
@@ -62,6 +64,113 @@
   function firstFamily(list) {
     const fams = String(list || "").split(",").map((f) => f.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
     return fams.find((f) => !GENERIC_FONTS.has(f.toLowerCase())) || fams[0] || "";
+  }
+
+  function toDeg(a) {
+    const v = parseFloat(a);
+    if (a.endsWith("turn")) return v * 360;
+    if (a.endsWith("grad")) return v * 0.9;
+    if (a.endsWith("rad")) return (v * 180) / Math.PI;
+    return v;
+  }
+
+  // "to top", "to bottom right" -> a CSS angle (0 = up, clockwise), or null if it isn't a side or
+  // corner. A corner aims so the 50% line runs through the box's other two corners.
+  function sideAngle(target, rc) {
+    const w = target.split(/\s+/);
+    const sy = w.includes("top") ? -1 : w.includes("bottom") ? 1 : 0;
+    const sx = w.includes("left") ? -1 : w.includes("right") ? 1 : 0;
+    if (w.length > 2 || w.some((x) => !/^(top|bottom|left|right)$/.test(x)) || (!sx && !sy) || (w.length === 2 && !(sx && sy))) return null;
+    return (Math.atan2(sx * rc.h, -sy * rc.w) * 180) / Math.PI;
+  }
+
+  // "rgba(26, 131, 59, 0.12) 0%" -> { color, pos: "0%" | null }; null if it isn't a plain color stop
+  // (a transition hint, a two-position stop, an interpolation space).
+  function parseColorStop(p) {
+    const m = /^((?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\([^)]*\)|#[0-9a-f]{3,8}|[a-z]+)(?:\s+(-?[\d.]+(?:%|px)))?$/i.exec(String(p).trim());
+    if (!m || !CSS.supports("color", m[1])) return null;
+    return { color: parseColor(m[1], true), pos: m[2] ?? null };
+  }
+
+  // One CSS gradient layer, measured against the element's box (rc) ->
+  // { type: "linear", angle } | { type: "radial", cx, cy, rx }, plus stops [{ pos, color }].
+  // Returns null for repeating or unparseable gradients.
+  function parseGradient(layer, rc) {
+    const m = /^(repeating-)?(linear|radial)-gradient\((.*)\)$/s.exec(layer.trim());
+    if (!m || m[1]) return null;
+    const parts = splitTop(m[3]);
+    if (parts.length < 2) return null;
+    const g = { type: m[2] };
+    let length;
+    if (g.type === "linear") {
+      let angle = 180;
+      if (/^-?[\d.]+(deg|turn|grad|rad)$/.test(parts[0])) angle = toDeg(parts.shift());
+      else if (/^to\s/.test(parts[0])) {
+        angle = sideAngle(parts.shift().slice(3).trim(), rc);
+        if (angle == null) return null;
+      }
+      g.angle = r2(((angle % 360) + 360) % 360);
+      const rad = (g.angle * Math.PI) / 180;
+      length = Math.abs(rc.w * Math.sin(rad)) + Math.abs(rc.h * Math.cos(rad));
+    } else {
+      const shape = parseColorStop(parts[0]) ? "" : parts.shift();
+      const [sizePart, atPart] = shape.split(/(?:^|\s+)at\s+/);
+      const at = (atPart || "center").trim().split(/\s+/);
+      if (at.length > 2) return null;
+      let [px, py] = at;
+      if (px === "top" || px === "bottom") [px, py] = [py || "center", px];
+      const frac = (v, size) => {
+        if (v === undefined || v === "center") return 0.5;
+        if (v === "left" || v === "top") return 0;
+        if (v === "right" || v === "bottom") return 1;
+        return v.endsWith("%") ? parseFloat(v) / 100 : parseFloat(v) / size;
+      };
+      g.cx = r2(frac(px, rc.w));
+      g.cy = r2(frac(py, rc.h));
+      const cx = g.cx * rc.w;
+      const cy = g.cy * rc.h;
+      const toSides = [cx, rc.w - cx, cy, rc.h - cy];
+      const toCorners = [[0, 0], [rc.w, 0], [0, rc.h], [rc.w, rc.h]].map(([x, y]) => Math.hypot(x - cx, y - cy));
+      const tokens = (sizePart || "").trim().split(/\s+/).filter((t) => t && t !== "circle" && t !== "ellipse");
+      if (tokens.some((t) => !/^(?:(?:closest|farthest)-(?:side|corner)|[\d.]+(?:px|%))$/.test(t))) return null;
+      const size = tokens[0];
+      let rx;
+      if (!size || size === "farthest-corner") rx = Math.max(...toCorners);
+      else if (size === "closest-side") rx = Math.min(...toSides);
+      else if (size === "farthest-side") rx = Math.max(...toSides);
+      else if (size === "closest-corner") rx = Math.min(...toCorners);
+      else rx = size.endsWith("%") ? (parseFloat(size) / 100) * rc.w : parseFloat(size);
+      g.rx = r2(rx);
+      length = rx;
+    }
+    if (!(length > 0) || (g.type === "radial" && !(g.rx > 0))) return null;
+    const stops = [];
+    for (const p of parts) {
+      const s = parseColorStop(p);
+      if (!s) return null;
+      stops.push({ color: s.color, pos: s.pos == null ? null : s.pos.endsWith("%") ? parseFloat(s.pos) / 100 : parseFloat(s.pos) / length });
+    }
+    if (stops.length < 2) return null;
+    // Missing end positions are 0 and 1; a position behind an earlier one is pulled up to it;
+    // the rest are spread evenly between their positioned neighbours.
+    if (stops[0].pos == null) stops[0].pos = 0;
+    if (stops[stops.length - 1].pos == null) stops[stops.length - 1].pos = 1;
+    let high = -Infinity;
+    for (const s of stops) {
+      if (s.pos == null) continue;
+      s.pos = Math.max(s.pos, high);
+      high = s.pos;
+    }
+    for (let i = 1; i < stops.length - 1; i++) {
+      if (stops[i].pos != null) continue;
+      let j = i;
+      while (stops[j].pos == null) j++;
+      const a = stops[i - 1].pos;
+      const b = stops[j].pos;
+      for (let k = i; k < j; k++) stops[k].pos = a + ((b - a) * (k - i + 1)) / (j - i + 1);
+    }
+    g.stops = stops.map((s) => ({ pos: Math.round(s.pos * 10000) / 10000, color: s.color }));
+    return g;
   }
 
   function formatOf(src) {
@@ -241,14 +350,22 @@
       };
     }
 
-    // A single url() background image -> its source and fit; anything else is unsupported.
-    function backgroundImageOf(cs) {
+    // A single background layer -> { gradient } | { src, format, fit } | { unsupported }.
+    function backgroundImageOf(cs, rc) {
       const bg = cs.backgroundImage;
       if (!bg || bg === "none") return null;
       // A `background` shorthand ending in a color reports an extra "none" image layer.
-      if (splitTop(bg).filter((l) => l !== "none").length > 1) return { unsupported: "background layers" };
-      const m = /^url\("?(.*?)"?\)$/.exec(bg);
-      if (!m) return { unsupported: /gradient\(/.test(bg) ? "gradient" : "background image" };
+      const layers = splitTop(bg).filter((l) => l !== "none");
+      if (layers.length > 1) return { unsupported: "background layers" };
+      if (!layers.length) return null;
+      if (/gradient\(/.test(layers[0])) {
+        // A gradient sized or tiled by background-size is a pattern, not a fill.
+        const fills = splitTop(cs.backgroundSize).every((z) => /^(auto|auto auto|100% 100%|cover|contain)$/.test(z));
+        const gradient = fills ? parseGradient(layers[0], rc) : null;
+        return gradient ? { gradient } : { unsupported: "gradient" };
+      }
+      const m = /^url\("?(.*?)"?\)$/.exec(layers[0]);
+      if (!m) return { unsupported: "background image" };
       const src = new URL(m[1], location.href).href;
       const format = formatOf(src);
       if (!format || format === "svg") return { unsupported: "background image" };
@@ -256,7 +373,7 @@
       return { src, format, fit: size === "cover" ? "cover" : size === "contain" ? "contain" : "fill" };
     }
 
-    function rasterReason(el, cs, tag, op) {
+    function rasterReason(el, cs, tag, op, rc) {
       if (RASTER_TAGS[tag]) return RASTER_TAGS[tag];
       if (tag === "img") {
         const fmt = formatOf(el.currentSrc || el.src);
@@ -282,7 +399,7 @@
       if (cs.clipPath && cs.clipPath !== "none") return "clip-path";
       if (cs.mixBlendMode && cs.mixBlendMode !== "normal") return "blend mode";
       if ((cs.backgroundClip || cs.webkitBackgroundClip) === "text") return "background-clip: text";
-      const bg = backgroundImageOf(cs);
+      const bg = backgroundImageOf(cs, rc);
       if (bg && bg.unsupported) return bg.unsupported;
       if (bg && bg.src && op < 0.999) return "image opacity";
       const t = transformOf(cs);
@@ -433,9 +550,11 @@
     function boxNode(el, cs, rc, rotate, op) {
       if (el === pageEl || !onCanvas(rc)) return;
       const d = decoration(cs, rc);
+      const bg = backgroundImageOf(cs, rc);
+      // A gradient fills the box, over its background color.
+      if (bg && bg.gradient) d.fill = { gradient: bg.gradient, base: d.fill };
       if (d.fill || d.border || d.sides || d.shadow) nodes.push({ kind: "box", rect: rc, ...d, opacity: op, rotate });
-      const bg = backgroundImageOf(cs);
-      if (bg && !bg.unsupported) {
+      if (bg && bg.src) {
         nodes.push({ kind: "image", id: mark(el), rect: rc, src: bg.src, format: bg.format, fit: bg.fit, natural: null, alt: "", border: null, shadow: null, opacity: op, rotate });
       }
     }
@@ -917,7 +1036,7 @@
       }
       const r = el.getBoundingClientRect();
       const rc = rectOf(r);
-      const reason = rasterReason(el, cs, tag, op);
+      const reason = rasterReason(el, cs, tag, op, rc);
       if (reason) {
         if (onCanvas(rc)) nodes.push({ kind: "raster", id: mark(el), rect: rc, reason, label: labelOf(el), alt: el.getAttribute("alt") || el.getAttribute("aria-label") || "" });
         return;
@@ -955,7 +1074,9 @@
       for (let e = layoutRoot; e && e !== pageEl.parentElement; e = e.parentElement) {
         const cs = getComputedStyle(e);
         if (cs.backgroundImage && cs.backgroundImage !== "none") {
-          return { raster: true, reason: /gradient\(/.test(cs.backgroundImage) ? "gradient background" : "background image" };
+          const bg = backgroundImageOf(cs, rectOf(e.getBoundingClientRect()));
+          if (bg && bg.gradient) return { gradient: bg.gradient, base: parseColor(cs.backgroundColor) };
+          return { raster: true, reason: bg && bg.unsupported === "gradient" ? "gradient background" : "background image" };
         }
         const c = parseColor(cs.backgroundColor);
         if (c) return { color: c };

@@ -88,3 +88,21 @@ export function colorXml(color, alpha) {
 export function solidFill(color, alpha) {
   return `<a:solidFill>${colorXml(color, alpha)}</a:solidFill>`;
 }
+
+// Linear or radial gradient fill. Stops: [{ pos 0..1, color, alpha? }], at least two. Linear
+// angles are DrawingML's (0 = left to right, 90 = top to bottom); a radial gradient runs from
+// its focus point (cx, cy as fractions of the shape) at pos 0 out to the shape's edge at pos 1.
+export function gradFillXml(g) {
+  const pct = (v) => Math.round(Math.min(1, Math.max(0, v)) * 100000);
+  const stops = g.stops.map((s) => `<a:gs pos="${pct(s.pos)}">${colorXml(s.color, s.alpha)}</a:gs>`).join("");
+  const shade =
+    g.type === "radial"
+      ? `<a:path path="circle"><a:fillToRect l="${pct(g.cx)}" t="${pct(g.cy)}" r="${pct(1 - g.cx)}" b="${pct(1 - g.cy)}"/></a:path>`
+      : `<a:lin ang="${Math.round(((((g.angle ?? 90) % 360) + 360) % 360) * 60000) % 21600000}" scaled="0"/>`;
+  return `<a:gradFill rotWithShape="1"><a:gsLst>${stops}</a:gsLst>${shade}</a:gradFill>`;
+}
+
+// A shape fill: a color (with optional alpha) or a gradient object.
+export function fillXml(fill, alpha) {
+  return fill && typeof fill === "object" ? gradFillXml(fill) : solidFill(fill, alpha);
+}

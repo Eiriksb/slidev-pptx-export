@@ -59,7 +59,7 @@ test("exports the innotek deck with --render: lint-clean, title placeholders, na
   assert.equal((cards.match(/prst="roundRect"/g) || []).length, 3);
   assert.match(cards, /<a:solidFill><a:schemeClr val="bg2"\/><\/a:solidFill><a:ln w="12446"><a:solidFill><a:schemeClr val="accent4"\/>/);
   assert.match(cards, /<a:solidFill><a:schemeClr val="accent1"\/><\/a:solidFill><a:latin typeface="\+mj-lt"\/><a:ea typeface="\+mj-ea"\/><a:cs typeface="\+mj-cs"\/><\/a:rPr><a:t>OVERVIEW<\/a:t>/);
-  assert.match(z.text("ppt/slides/slide1.xml"), /<p:bg><p:bgPr><a:blipFill/);
+  assert.match(z.text("ppt/slides/slide1.xml"), /<p:bg><p:bgPr><a:gradFill rotWithShape="1">[\s\S]*<a:path path="circle">/);
 });
 
 test("the innotek table and code block are native", deckOpts, async () => {

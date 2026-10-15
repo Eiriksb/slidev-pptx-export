@@ -109,13 +109,59 @@ function sideBar(rect, side, u, style, opacity) {
   return bar;
 }
 
+// A CSS gradient (and the color under it) -> a DrawingML gradient. Stops are composited over an
+// opaque base color; transparent stops borrow their neighbour's hue (a fade to "transparent"
+// would otherwise pass through black); radial stop positions are rescaled from the CSS radius
+// to DrawingML's focus-to-farthest-corner radius; angles move from CSS (0 = up) to DrawingML
+// (0 = left to right).
+function gradientOf(g, base, rect, style, opacity = 1) {
+  let stops = g.stops.map((s) => ({ pos: s.pos, color: s.color }));
+  stops = stops.map((s, i) => {
+    if (s.color.alpha > 0) return s;
+    const near = stops.slice(i + 1).concat(stops.slice(0, i).reverse()).find((x) => x.color.alpha > 0);
+    return near ? { pos: s.pos, color: { hex: near.color.hex, alpha: 0 } } : s;
+  });
+  if (base && (base.alpha ?? 1) >= 1) {
+    const over = (c) => {
+      const a = c.alpha ?? 1;
+      const ch = (i) => Math.round(parseInt(c.hex.slice(i, i + 2), 16) * a + parseInt(base.hex.slice(i, i + 2), 16) * (1 - a));
+      return { hex: [0, 2, 4].map((i) => ch(i).toString(16).padStart(2, "0")).join("").toUpperCase(), alpha: 1 };
+    };
+    stops = stops.map((s) => ({ pos: s.pos, color: over(s.color) }));
+  }
+  let out;
+  if (g.type === "radial") {
+    const cx = g.cx * rect.w;
+    const cy = g.cy * rect.h;
+    const far = Math.max(...[[0, 0], [rect.w, 0], [0, rect.h], [rect.w, rect.h]].map(([x, y]) => Math.hypot(x - cx, y - cy)));
+    const k = far > 0 ? g.rx / far : 1;
+    stops = stops.map((s) => ({ ...s, pos: Math.min(1, s.pos * k) }));
+    out = { type: "radial", cx: g.cx, cy: g.cy };
+  } else {
+    out = { type: "linear", angle: (((g.angle - 90) % 360) + 360) % 360 };
+  }
+  // Past either end CSS keeps painting the end color; DrawingML wants stops at 0 and 1.
+  const first = stops[0];
+  if (first.pos > 0) stops.unshift({ pos: 0, color: first.color });
+  const last = stops[stops.length - 1];
+  if (last.pos < 1) stops.push({ pos: 1, color: last.color });
+  out.stops = stops.map((s) => {
+    const stop = { pos: round(s.pos), color: colorOf(s.color, style) };
+    const a = alphaOf(s.color, opacity);
+    if (a !== undefined) stop.alpha = a;
+    return stop;
+  });
+  return out;
+}
+
 function boxShapes(node, u, style) {
   const op = node.opacity ?? 1;
   const shapes = [];
   if (node.fill || node.border || node.shadow) {
     const shape = { kind: "text", ...u.box(node.rect), geometry: node.radius > 0 ? "roundRect" : "rect", paras: [] };
     if (node.radius > 0) shape.radius = u.inch(node.radius);
-    if (node.fill) {
+    if (node.fill?.gradient) shape.fill = gradientOf(node.fill.gradient, node.fill.base, node.rect, style, op);
+    else if (node.fill) {
       shape.fill = colorOf(node.fill, style);
       const a = alphaOf(node.fill, op);
       if (a !== undefined) shape.fillAlpha = a;
@@ -264,9 +310,10 @@ export function shapesOf(node, u, style) {
   }
 }
 
-function backgroundOf(bg, style) {
+function backgroundOf(bg, style, canvas) {
   if (!bg) return null;
   if (bg.png) return { image: { data: bg.png, ext: "png" } };
+  if (bg.gradient) return { gradient: gradientOf(bg.gradient, bg.base, { x: 0, y: 0, w: canvas.w, h: canvas.h }, style) };
   if (!bg.color) return null;
   const color = colorOf(bg.color, style);
   const alpha = alphaOf(bg.color);
@@ -299,7 +346,7 @@ export function sceneToSpec(scene, style) {
   const u = unitsFor(scene, style.geometry);
   const spec = { layout: "blank", placeholders: {}, shapes: [] };
   if (scene.notes) spec.notes = scene.notes;
-  const bg = backgroundOf(scene.background, style);
+  const bg = backgroundOf(scene.background, style, scene.canvas);
   if (bg) spec.background = bg;
   let title = null;
   for (const node of scene.nodes) {

@@ -157,3 +157,11 @@ test("a title with titleZ is drawn among the shapes at its DOM position, not ben
   const s2 = z.text("ppt/slides/slide2.xml");
   assert.ok(s2.indexOf("<a:t>ONLY</a:t>") < s2.indexOf('<p:ph type="title"/>'), "a titleZ past the last shape goes on top");
 });
+
+test("gradient slide backgrounds and gradient shape fills pass lint", async () => {
+  const gradient = { type: "radial", cx: 0.5, cy: 0.4, stops: [{ pos: 0, color: "#E5F1E8" }, { pos: 1, color: "lt1" }] };
+  const slides = [{ layout: "blank", background: { gradient }, shapes: [{ kind: "text", x: 1, y: 1, w: 2, h: 1, fill: { type: "linear", angle: 90, stops: [{ pos: 0, color: "accent1" }, { pos: 1, color: "accent2", alpha: 0 }] }, paras: [] }] }];
+  const buffer = await writePptx(slides, { ...DECK, logo: null });
+  assert.deepEqual(await lintPackage(buffer), []);
+  assert.match((await unzip(buffer)).text("ppt/slides/slide1.xml"), /<p:bg><p:bgPr><a:gradFill/);
+});

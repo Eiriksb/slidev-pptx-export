@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { placeholderXml, shapeXml, pictureXml, graphicFrameXml, slideXml, phXml } from "../src/ooxml/shapes.mjs";
+import { placeholderXml, shapeXml, pictureXml, graphicFrameXml, slideXml, phXml, backgroundXml } from "../src/ooxml/shapes.mjs";
 import { parseXml } from "./helpers.mjs";
 
 const ctx = { lang: "en-US", fonts: { mono: "M" } };
@@ -78,4 +78,11 @@ test("pictures can be cropped, outlined and shadowed; a plain picture is unchang
   assert.match(xml, /<\/a:prstGeom><a:ln w="9525"><a:solidFill><a:schemeClr val="accent4"\/><\/a:solidFill><\/a:ln><a:effectLst>/);
   const plain = pictureXml({ id: 4, name: "P", rId: "rId2", box: { x: 0, y: 0, w: 1, h: 1 } });
   assert.match(plain, /<a:blip r:embed="rId2"\/><a:stretch><a:fillRect\/><\/a:stretch><\/p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"\/><a:ext cx="914400" cy="914400"\/><\/a:xfrm><a:prstGeom prst="rect"><a:avLst\/><\/a:prstGeom><\/p:spPr>/);
+});
+
+test("gradient fills: a linear angle, a radial center, alpha stops", () => {
+  const lin = shapeXml({ x: 0, y: 0, w: 1, h: 1, fill: { type: "linear", angle: 0, stops: [{ pos: 0, color: "#FF0000" }, { pos: 1, color: "accent1", alpha: 0.5 }] }, paras: [] }, 2, ctx);
+  assert.match(lin, /<a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"\/><\/a:gs><a:gs pos="100000"><a:schemeClr val="accent1"><a:alpha val="50000"\/><\/a:schemeClr><\/a:gs><\/a:gsLst><a:lin ang="0" scaled="0"\/><\/a:gradFill>/);
+  const rad = backgroundXml({ gradient: { type: "radial", cx: 0.5, cy: 0.38, stops: [{ pos: 0, color: "#E5F1E8" }, { pos: 0.6, color: "lt1" }, { pos: 1, color: "lt1" }] } });
+  assert.match(rad, /^<p:bg><p:bgPr><a:gradFill rotWithShape="1"><a:gsLst>.*<\/a:gsLst><a:path path="circle"><a:fillToRect l="50000" t="38000" r="50000" b="62000"\/><\/a:path><\/a:gradFill><a:effectLst\/><\/p:bgPr><\/p:bg>$/);
 });

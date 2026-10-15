@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderSpecs, nodeSignature, repeatedSignatures } from "../src/render/index.mjs";
+import { renderSpecs, nodeSignature, repeatedSignatures, uncoveredSignatures } from "../src/render/index.mjs";
 import { mergeConfig } from "../src/config.mjs";
 import { splitSlides, parseSlide } from "../src/parse.mjs";
 
@@ -164,7 +164,7 @@ test("a node's signature is its kind, rect (to 0.5 px) and content; titles and b
 test("a signature is repeated only when every scene has it, and there are at least two scenes", () => {
   const note = (text) => ({ kind: "text", rect: { x: 800, y: 520, w: 100, h: 12 }, runs: [run(text)] });
   const sig = nodeSignature(note("Confidential"));
-  assert.deepEqual([...repeatedSignatures([{ nodes: [note("Confidential")] }, { nodes: [note("Confidential"), note("Other")] }])], [sig]);
+  assert.deepEqual([...repeatedSignatures([{ nodes: [note("Confidential")] }, { nodes: [note("Confidential"), note("Other")] }])], [`${sig}#0`]);
   assert.equal(repeatedSignatures([{ nodes: [note("Confidential")] }, { nodes: [note("Other")] }]).size, 0);
   assert.equal(repeatedSignatures([{ nodes: [note("Confidential")] }]).size, 0);
 });
@@ -177,4 +177,76 @@ test("a repeated picture is announced once, for the slide master; a failed slide
   assert.equal(result.masterShapes.length, 1);
   assert.equal(result.masterShapes[0].kind, "image");
   assert.deepEqual(result.specs.map((s) => s.shapes.length), [0, 0, 0]);
+});
+
+const footerLogo = (extra = {}) => ({ kind: "image", id: 9, rect: { x: 48, y: 498, w: 95, h: 26 }, src: "/logo.png", format: "png", fit: "fill", natural: null, alt: "Logo", border: null, shadow: null, opacity: 1, data: Buffer.from("same"), ext: "png", ...extra });
+const boxNode = (rect, fill, extra = {}) => ({ kind: "box", rect, fill, border: null, sides: null, radius: 0, shadow: null, opacity: 1, rotate: null, ...extra });
+const BAND = { x: 0, y: 450, w: 980, h: 102 };
+
+test("a logo the page draws above a slide's opaque band stays on the slides, not the master", async () => {
+  const band = () => boxNode(BAND, C("1F2937"));
+  const { args } = setup("# A\n\n---\n\n# B\n", { slides: [scene(1, 0, "A", [band(), footerLogo()]), scene(2, 1, "B", [footerLogo()])] });
+  const { result } = await withWarnings(() => renderSpecs(args));
+  assert.deepEqual(result.masterShapes, []);
+  assert.deepEqual(result.specs.map((sp) => sp.shapes.map((x) => x.kind)), [["text", "image"], ["image"]]);
+});
+
+test("a band the page draws after the logo doesn't stop the logo going to the master", async () => {
+  const { args } = setup("# A\n\n---\n\n# B\n", { slides: [scene(1, 0, "A", [footerLogo(), boxNode(BAND, C("1F2937"))]), scene(2, 1, "B", [footerLogo()])] });
+  const { result } = await withWarnings(() => renderSpecs(args));
+  assert.deepEqual(result.masterShapes.map((x) => x.alt), ["Logo"]);
+  assert.deepEqual(result.specs.map((sp) => sp.shapes.length), [1, 0]);
+});
+
+test("a translucent box before the logo doesn't hide it, so the logo still goes to the master", async () => {
+  const veil = boxNode(BAND, C("1F2937"));
+  veil.fill.alpha = 0.3;
+  const faded = boxNode(BAND, C("1F2937"), { opacity: 0.5 });
+  const { args } = setup("# A\n\n---\n\n# B\n", { slides: [scene(1, 0, "A", [veil, faded, footerLogo()]), scene(2, 1, "B", [footerLogo()])] });
+  const { result } = await withWarnings(() => renderSpecs(args));
+  assert.deepEqual(result.masterShapes.map((x) => x.alt), ["Logo"]);
+});
+
+test("a repeated element that a dropped repeated one would cover is dropped too", async () => {
+  const hero = boxNode({ x: 0, y: 0, w: 980, h: 552 }, C("0B3D91"));
+  const picture = { kind: "raster", id: 3, rect: { x: 0, y: 0, w: 980, h: 552 }, reason: "canvas", label: "canvas", alt: "", png: Buffer.from("own") };
+  const { args } = setup("# A\n\n---\n\n# B\n", { slides: [scene(1, 0, "A", [picture, hero, footerLogo()]), scene(2, 1, "B", [hero, footerLogo()])] });
+  const { result } = await withWarnings(() => renderSpecs(args));
+  assert.deepEqual(result.masterShapes, []);
+  assert.deepEqual(result.specs.map((sp) => sp.shapes.length), [3, 2]);
+});
+
+test("uncoveredSignatures keeps a repeated signature only when nothing painted and unshared precedes it on any scene", () => {
+  const scenes = [{ nodes: [boxNode(BAND, C("111111")), footerLogo()] }, { nodes: [footerLogo()] }];
+  const repeated = repeatedSignatures(scenes);
+  assert.equal(repeated.size, 1);
+  assert.equal(uncoveredSignatures(scenes, repeated).size, 0);
+  const apart = [{ nodes: [boxNode({ x: 0, y: 0, w: 980, h: 100 }, C("111111")), footerLogo()] }, { nodes: [footerLogo()] }];
+  assert.equal(uncoveredSignatures(apart, repeatedSignatures(apart)).size, 1);
+  const code = [{ nodes: [{ kind: "code", rect: BAND, lines: [] }, footerLogo()] }, { nodes: [footerLogo()] }];
+  assert.equal(uncoveredSignatures(code, repeatedSignatures(code)).size, 0);
+});
+
+test("two identical elements on one slide and one on another: only one goes to the master", async () => {
+  const card = () => boxNode({ x: 100, y: 200, w: 200, h: 100 }, C("E5F1E8"));
+  const { args } = setup("# A\n\n---\n\n# B\n", { slides: [scene(1, 0, "A", [card(), card()]), scene(2, 1, "B", [card()])] });
+  const { result } = await withWarnings(() => renderSpecs(args));
+  assert.equal(result.masterShapes.length, 1);
+  assert.deepEqual(result.specs.map((sp) => sp.shapes.length), [1, 0]);
+});
+
+test("the same element at another opacity, rotation, fit or alignment is not the same element", async () => {
+  const at = { x: 10, y: 20, w: 30, h: 40 };
+  const base = footerLogo({ rect: at });
+  for (const change of [{ opacity: 0.5 }, { rotate: 5 }, { fit: "cover" }, { border: { width: 1, color: C("000000") } }, { shadow: { x: 1, y: 1, blur: 2, color: C("000000") } }]) {
+    assert.notEqual(nodeSignature(base), nodeSignature({ ...base, ...change }), JSON.stringify(change));
+  }
+  const text = { kind: "text", rect: at, runs: [run("A")], align: "left", lineHeight: 20, singleLine: true, opacity: 1 };
+  for (const change of [{ opacity: 0.5 }, { rotate: 5 }, { align: "center" }, { lineHeight: 24 }, { singleLine: false }]) {
+    assert.notEqual(nodeSignature(text), nodeSignature({ ...text, ...change }), JSON.stringify(change));
+  }
+  const box = boxNode(at, C("112233"));
+  for (const change of [{ opacity: 0.5 }, { rotate: 5 }]) assert.notEqual(nodeSignature(box), nodeSignature({ ...box, ...change }), JSON.stringify(change));
+  const { args } = setup("# A\n\n---\n\n# B\n", { slides: [scene(1, 0, "A", [footerLogo()]), scene(2, 1, "B", [footerLogo({ opacity: 0.5 })])] });
+  assert.deepEqual((await withWarnings(() => renderSpecs(args))).result.masterShapes, []);
 });

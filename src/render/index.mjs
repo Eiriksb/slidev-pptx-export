@@ -29,18 +29,34 @@ function resolveChart(node, config, S) {
 
 const sha1 = (b) => createHash("sha1").update(b).digest("hex");
 
-// What makes two nodes "the same element": kind, position (to 0.5 px) and content. Titles
-// never count - they differ per slide even when they sit in the same place.
+// What makes two nodes "the same element": kind, position (to 0.5 px), content and everything
+// that changes how it is drawn. Titles never count - they differ per slide even when they sit
+// in the same place.
 export function nodeSignature(n) {
   if (!n.rect) return null;
   const r = [n.rect.x, n.rect.y, n.rect.w, n.rect.h].map((v) => Math.round(v * 2) / 2).join(",");
+  const look = JSON.stringify([n.opacity ?? 1, n.rotate ?? 0]);
   if (n.kind === "image" || n.kind === "raster") {
     const bytes = n.png || n.data;
-    return bytes ? `${n.kind}|${r}|${sha1(bytes)}|${n.svg ? sha1(n.svg) : ""}` : null;
+    return bytes ? `${n.kind}|${r}|${sha1(bytes)}|${n.svg ? sha1(n.svg) : ""}|${look}|${JSON.stringify([n.fit, n.crop, n.border, n.shadow])}` : null;
   }
-  if (n.kind === "text" && n.role !== "title") return `text|${r}|${JSON.stringify(n.runs)}`;
-  if (n.kind === "box") return `box|${r}|${JSON.stringify([n.fill, n.border, n.sides, n.radius, n.shadow])}`;
+  if (n.kind === "text" && n.role !== "title") return `text|${r}|${JSON.stringify(n.runs)}|${look}|${JSON.stringify([n.align, n.lineHeight, n.singleLine])}`;
+  if (n.kind === "box") return `box|${r}|${JSON.stringify([n.fill, n.border, n.sides, n.radius, n.shadow])}|${look}`;
   return null;
+}
+
+// A signature per node (null for a node that can't be shared), numbered within the scene: two
+// identical elements on one slide are two signatures, so one of them can be repeated while the
+// other is not.
+export function signaturesOf(nodes) {
+  const seen = new Map();
+  return nodes.map((n) => {
+    const sig = nodeSignature(n);
+    if (!sig) return null;
+    const k = seen.get(sig) || 0;
+    seen.set(sig, k + 1);
+    return `${sig}#${k}`;
+  });
 }
 
 // Signatures present on every scene (when there are at least two).
@@ -48,9 +64,42 @@ export function repeatedSignatures(scenes) {
   if (scenes.length < 2) return new Set();
   const counts = new Map();
   for (const s of scenes) {
-    for (const sig of new Set(s.nodes.map(nodeSignature).filter(Boolean))) counts.set(sig, (counts.get(sig) || 0) + 1);
+    for (const sig of signaturesOf(s.nodes)) if (sig) counts.set(sig, (counts.get(sig) || 0) + 1);
   }
   return new Set([...counts].filter(([, n]) => n === scenes.length).map(([sig]) => sig));
+}
+
+const intersects = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+// Whether a node hides what is drawn beneath it: pictures, tables, charts and code always do; a
+// box only when its fill is a gradient or an opaque color.
+function paints(n) {
+  if (!n.rect) return false;
+  if (["image", "raster", "table", "chart", "code"].includes(n.kind)) return true;
+  return n.kind === "box" && !!n.fill && (!!n.fill.gradient || (n.fill.alpha ?? 1) >= 0.99) && (n.opacity ?? 1) >= 0.99;
+}
+
+// The master is drawn beneath every slide's own content, so an element the page draws above
+// something slide-specific can't go there: a repeated signature is dropped when, on any scene, a
+// painting node that is not repeated comes before it in DOM order and overlaps it. A dropped
+// signature stays on the slides, so it can cover later ones - repeat until nothing changes.
+export function uncoveredSignatures(scenes, repeated) {
+  const kept = new Set(repeated);
+  const sigs = scenes.map((s) => signaturesOf(s.nodes));
+  for (let changed = true; changed; ) {
+    changed = false;
+    scenes.forEach((s, k) => {
+      s.nodes.forEach((n, i) => {
+        if (!kept.has(sigs[k][i])) return;
+        const covered = s.nodes.slice(0, i).some((m, j) => !kept.has(sigs[k][j]) && paints(m) && intersects(m.rect, n.rect));
+        if (covered) {
+          kept.delete(sigs[k][i]);
+          changed = true;
+        }
+      });
+    });
+  }
+  return kept;
 }
 
 export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, codeStore, screenshots = false, deps = {} }) {
@@ -84,16 +133,19 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
   // static layout's warnings.
   let fromMarkdown = null;
 
-  // Elements every slide shares go on the slide master once.
+  // Elements every slide shares - and no slide content covers - go on the slide master once.
   const rendered = captured.slides.filter((s) => !s.error);
-  const repeated = repeatedSignatures(rendered);
+  const onMaster = uncoveredSignatures(rendered, repeatedSignatures(rendered));
   let masterShapes = [];
-  if (repeated.size) {
+  if (onMaster.size) {
+    const sigs = rendered.map((s) => signaturesOf(s.nodes));
     const first = rendered[0];
-    const shared = first.nodes.filter((n) => repeated.has(nodeSignature(n)));
+    const shared = first.nodes.filter((n, i) => onMaster.has(sigs[0][i]));
     for (const n of shared) if (n.kind === "raster") console.warn(`Notice: slide master: ${n.label} exported as a picture (${n.reason}).`);
     masterShapes = shared.flatMap((n) => shapesOf(n, unitsFor(first, style.geometry), sceneStyle));
-    for (const s of rendered) s.nodes = s.nodes.filter((n) => !repeated.has(nodeSignature(n)));
+    rendered.forEach((s, k) => {
+      s.nodes = s.nodes.filter((n, i) => !onMaster.has(sigs[k][i]));
+    });
   }
 
   const specs = [];

@@ -49,7 +49,8 @@ async function shapeToXml(shape, id, env) {
       return shapeXml(shape, id, ctx);
     case "image": {
       const rId = pkg.rel(part, media.add(shape.path ?? { data: shape.data, ext: shape.ext }), REL.image);
-      return pictureXml({ id, name: `Picture ${id}`, descr: shape.alt, rId, box: shape, crop: shape.crop, line: shape.line, shadow: shape.shadow });
+      const svgRId = shape.svg ? pkg.rel(part, media.add({ data: shape.svg, ext: "svg" }), REL.image) : null;
+      return pictureXml({ id, name: `Picture ${id}`, descr: shape.alt, rId, svgRId, box: shape, crop: shape.crop, line: shape.line, shadow: shape.shadow });
     }
     case "table":
       return graphicFrameXml({ id, name: `Table ${id}`, box: shape, uri: TABLE_URI, inner: tableXml(shape, ctx) });

@@ -80,3 +80,9 @@ test("ExampleChart is a native, editable chart from the page itself when no reso
   assert.match(chart, /<c:numFmt formatCode="0&quot;%&quot;" sourceLinked="0"\/>/);
   assert.match(chart, /<c:legendPos val="b"\/>/);
 });
+
+test("the SVG logo is exported as an SVG picture with a PNG fallback", deckOpts, async () => {
+  const { z } = await exportInnotek("innotek-svg.pptx");
+  assert.ok(z.names.some((n) => /^ppt\/media\/image\d+\.svg$/.test(n)));
+  assert.match(z.text("ppt/slides/slide2.xml"), /<asvg:svgBlip /);
+});

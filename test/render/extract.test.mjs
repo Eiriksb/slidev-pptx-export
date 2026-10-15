@@ -495,3 +495,9 @@ test("a chart found through its Vue component names the components around it; ot
   assert.deepEqual([pie.kind, pie.reason], ["raster", "chart type pie"]);
   assert.deepEqual([plain.kind, plain.reason], ["raster", "canvas"]);
 });
+
+test("an SVG image is an image node, not a picture of an element", opts, async () => {
+  const svg = `data:image/svg+xml;charset=utf-8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="#1a833b"/></svg>')}`;
+  const s = await extractHtml(browser, `<img src="${svg}" alt="Logo" style="display:block;width:80px;height:40px">`);
+  assert.deepEqual(s.nodes.map((n) => [n.kind, n.format, n.alt]), [["image", "svg", "Logo"]]);
+});

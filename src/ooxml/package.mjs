@@ -58,6 +58,7 @@ const MEDIA_TYPES = {
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
   gif: "image/gif",
+  svg: "image/svg+xml",
   xlsx: `${SML}.sheet`,
 };
 

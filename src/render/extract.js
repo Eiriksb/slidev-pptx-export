@@ -417,7 +417,6 @@
       if (RASTER_TAGS[tag]) return RASTER_TAGS[tag];
       if (tag === "img") {
         const fmt = formatOf(el.currentSrc || el.src);
-        if (fmt === "svg") return "SVG image";
         if (!fmt) return "image format";
         if (op < 0.999) return "image opacity";
       }
@@ -601,7 +600,9 @@
 
     function imageNode(el, cs, rc, rotate, op) {
       const src = el.currentSrc || el.src;
-      if (!el.complete || !el.naturalWidth) {
+      const svg = formatOf(src) === "svg";
+      // An SVG without width/height has no natural size but still draws.
+      if (!el.complete || (!el.naturalWidth && !svg)) {
         nodes.push({ kind: "missing", label: labelOf(el), src });
         return;
       }

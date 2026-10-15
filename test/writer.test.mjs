@@ -165,3 +165,13 @@ test("gradient slide backgrounds and gradient shape fills pass lint", async () =
   assert.deepEqual(await lintPackage(buffer), []);
   assert.match((await unzip(buffer)).text("ppt/slides/slide1.xml"), /<p:bg><p:bgPr><a:gradFill/);
 });
+
+test("SVG pictures carry the SVG next to a PNG fallback", async () => {
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2"><rect width="4" height="2" fill="#1A833B"/></svg>');
+  const buffer = await writePptx([{ layout: "blank", shapes: [{ kind: "image", x: 1, y: 1, w: 2, h: 1, data: readFileSync(PIC), ext: "png", svg, alt: "Logo" }] }], { ...DECK, logo: null });
+  assert.deepEqual(await lintPackage(buffer), []);
+  const z = await unzip(buffer);
+  assert.ok(z.names.includes("ppt/media/image2.svg"));
+  assert.match(z.text("[Content_Types].xml"), /<Default Extension="svg" ContentType="image\/svg\+xml"\/>/);
+  assert.match(z.text("ppt/slides/slide1.xml"), /<a:blip r:embed="rId2"><a:extLst><a:ext uri="\{96DAC541-7B7A-43D3-8B79-37D633B846F1\}"><asvg:svgBlip xmlns:asvg="http:\/\/schemas.microsoft.com\/office\/drawing\/2016\/SVG\/main" r:embed="rId3"\/><\/a:ext><\/a:extLst><\/a:blip>/);
+});

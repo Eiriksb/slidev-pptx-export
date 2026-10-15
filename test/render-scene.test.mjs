@@ -312,3 +312,12 @@ test("radial stops scale by the ellipse's equal-area radius over the focus-to-co
   const [round] = sceneToSpec(scene([gradBox({ gradient: circle, base: null })]), STYLE).shapes;
   assert.deepEqual(round.fill.stops.map((x) => x.pos), [0, Math.round((100 / Math.hypot(100, 50)) * 10000) / 10000, 1]);
 });
+
+test("an SVG image keeps its SVG bytes next to the PNG", () => {
+  const svg = Buffer.from("<svg/>");
+  const png = Buffer.from("png");
+  const node = { kind: "image", id: 1, rect: { x: 0, y: 0, w: 80, h: 40 }, src: "/logo.svg", format: "svg", fit: "fill", natural: null, alt: "Logo", border: null, shadow: null, opacity: 1, data: png, ext: "png", svg };
+  const [shape] = sceneToSpec(scene([node]), STYLE).shapes;
+  assert.equal(shape.svg, svg);
+  assert.equal(shape.data, png);
+});

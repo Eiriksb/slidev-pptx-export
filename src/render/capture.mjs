@@ -113,6 +113,24 @@ async function fetchBytes(page, src) {
   return Buffer.from(await res.body());
 }
 
+// An SVG drawn at the element's size (2x) into a transparent PNG, the fallback next to the SVG.
+async function svgPng(page, src, rect) {
+  const dataUrl = await page.evaluate(
+    async ({ url, w, h }) => {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(w * 2));
+      c.height = Math.max(1, Math.round(h * 2));
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      return c.toDataURL("image/png");
+    },
+    { url: src, w: rect.w, h: rect.h },
+  );
+  return Buffer.from(dataUrl.slice(dataUrl.indexOf(",") + 1), "base64");
+}
+
 // Image bytes for the writer. An <img> that can't be fetched is drawn as a picture; a CSS background
 // (the extractor gives those no natural size) is dropped, since a picture of its container would
 // bake the container's text in.
@@ -120,6 +138,15 @@ async function loadImage(page, node) {
   const isBackground = !node.natural;
   try {
     node.data = await fetchBytes(page, node.src);
+    if (node.format === "svg") {
+      const svg = node.data;
+      node.data = await svgPng(page, node.src, node.rect);
+      node.svg = svg;
+      node.ext = "png";
+      node.natural = null;
+      node.fit = "fill";
+      return;
+    }
     node.ext = node.format;
     if (!node.natural) {
       const d = imageSize(node.data);

@@ -62,3 +62,35 @@ test("a hanging image doesn't stall the export, a slide error is a failed slide,
   assert.ok(three.nodes.some((n) => n.kind === "missing" && n.src.endsWith("/404.png")));
   assert.ok(three.nodes.some((n) => n.kind === "text" && textOf(n) === "Inside"));
 });
+
+test("an SVG image keeps its file next to a 2x PNG at its box, with or without a natural size; one that won't draw is a picture", opts, async (t) => {
+  const LOGO = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20"><rect width="40" height="20" fill="#1a833b"/></svg>';
+  const SIZED = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="#1a833b"/></svg>';
+  const html =
+    "<!doctype html><html><head><style>body{margin:0}img{display:block}</style><script>" +
+    "window.__slidev__ = { nav: { total: 1, slides: [{ no: 1, meta: { slide: { sourceIndex: 0 } } }] }, configs: { canvasWidth: 980, aspectRatio: 16 / 9 } };" +
+    "</script></head><body>" +
+    page(1, '<img src="/logo.svg" style="width:100px;height:50px"><img src="/sized.svg" style="width:80px;height:40px"><img src="/bad.svg" style="width:60px;height:30px">') +
+    "</body></html>";
+  const files = { "/logo.svg": LOGO, "/sized.svg": SIZED, "/bad.svg": "this is not an svg" };
+  const server = createServer((req, res) => {
+    const path = new URL(req.url, "http://localhost").pathname;
+    if (path === "/1") return void res.writeHead(200, { "content-type": "text/html" }).end(html);
+    if (files[path]) return void res.writeHead(200, { "content-type": "image/svg+xml" }).end(files[path]);
+    res.writeHead(404).end("not found");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { slides: [slide] } = await captureDeck({ baseUrl: `http://127.0.0.1:${server.address().port}`, chromium, timeout: 15000 });
+  assert.equal(slide.error, undefined);
+  const [logo, sized, bad] = slide.nodes;
+  const size = (png) => [png.readUInt32BE(16), png.readUInt32BE(20)];
+  assert.deepEqual([logo.kind, logo.format, logo.ext, logo.natural, logo.fit, logo.svg.toString()], ["image", "svg", "png", null, "fill", LOGO]);
+  assert.deepEqual(size(logo.data), [200, 100]);
+  assert.deepEqual([sized.kind, sized.svg.toString()], ["image", SIZED]);
+  assert.deepEqual(size(sized.data), [160, 80]);
+  assert.equal(bad.kind, "raster");
+  assert.match(bad.reason, /^image not fetched/);
+  assert.equal(bad.svg, undefined);
+});

@@ -86,14 +86,21 @@ export function backgroundXml(bg, rId) {
   return `<p:bg><p:bgPr>${fill}<a:effectLst/></p:bgPr></p:bg>`;
 }
 
-export function pictureXml({ id, name, descr, rId, box, crop, line, shadow }) {
+// PowerPoint 2016+ draws the SVG; older PowerPoint, Google Slides, Keynote and LibreOffice use the PNG.
+const SVG_EXT = "{96DAC541-7B7A-43D3-8B79-37D633B846F1}";
+const ASVG = "http://schemas.microsoft.com/office/drawing/2016/SVG/main";
+
+export function pictureXml({ id, name, descr, rId, svgRId, box, crop, line, shadow }) {
   const alt = descr ? ` descr="${esc(descr)}"` : "";
   // srcRect crops in 1/1000 of a percent of the image, per side.
   const sides = crop ? ["l", "t", "r", "b"].filter((k) => crop[k] > 0) : [];
   const srcRect = sides.length ? `<a:srcRect${sides.map((k) => ` ${k}="${Math.round(crop[k] * 100000)}"`).join("")}/>` : "";
+  const blip = svgRId
+    ? `<a:blip r:embed="${rId}"><a:extLst><a:ext uri="${SVG_EXT}"><asvg:svgBlip xmlns:asvg="${ASVG}" r:embed="${svgRId}"/></a:ext></a:extLst></a:blip>`
+    : `<a:blip r:embed="${rId}"/>`;
   return (
     `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${esc(name)}"${alt}/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>` +
-    `<p:blipFill><a:blip r:embed="${rId}"/>${srcRect}<a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
+    `<p:blipFill>${blip}${srcRect}<a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
     `<p:spPr>${xfrmXml(box)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${line ? lineXml(line) : ""}${shadow ? shadowXml(shadow) : ""}</p:spPr></p:pic>`
   );
 }

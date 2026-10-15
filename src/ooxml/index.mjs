@@ -95,7 +95,13 @@ export async function writePptx(slides, deck) {
     layouts.set(def.key, { part, def });
   });
   const logo = deck.logo ? { rId: pkg.rel(MASTER, media.add(deck.logo.path), REL.image), box: deck.logo.box } : null;
-  pkg.addXml(MASTER, CT.slideMaster, masterXml({ geometry: deck.geometry, ctx, layoutIds, logo }));
+  // Render mode can put elements every slide shares (a footer logo) on the master. Their ids
+  // follow the master's own title (2), body (3) and logo (4).
+  const masterEnv = { pkg, part: MASTER, media, ctx, counters };
+  let extra = "";
+  let masterShapeId = 5;
+  for (const shape of deck.masterShapes || []) extra += await shapeToXml(shape, masterShapeId++, masterEnv);
+  pkg.addXml(MASTER, CT.slideMaster, masterXml({ geometry: deck.geometry, ctx, layoutIds, logo, extra }));
 
   // The notes master (with its own theme - every master needs one) only exists if some slide
   // has notes.

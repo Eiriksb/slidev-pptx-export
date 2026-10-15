@@ -3,10 +3,11 @@
 // (the static export) instead.
 
 import { dirname } from "node:path";
+import { createHash } from "node:crypto";
 import { startDeckServer } from "./server.mjs";
 import { loadChromium } from "./browser.mjs";
 import { captureDeck } from "./capture.mjs";
-import { sceneToSpec } from "./scene.mjs";
+import { sceneToSpec, shapesOf, unitsFor } from "./scene.mjs";
 import { deckStyle, layoutEach, groupedBarChart } from "../layout.mjs";
 
 // Config keys that only restate what the page shows; render mode reads the page instead.
@@ -24,6 +25,32 @@ function resolveChart(node, config, S) {
   } catch (err) {
     console.warn(`Warning: chart resolver ${name} failed (${err.message}) - using the chart drawn on the page.`);
   }
+}
+
+const sha1 = (b) => createHash("sha1").update(b).digest("hex");
+
+// What makes two nodes "the same element": kind, position (to 0.5 px) and content. Titles
+// never count - they differ per slide even when they sit in the same place.
+export function nodeSignature(n) {
+  if (!n.rect) return null;
+  const r = [n.rect.x, n.rect.y, n.rect.w, n.rect.h].map((v) => Math.round(v * 2) / 2).join(",");
+  if (n.kind === "image" || n.kind === "raster") {
+    const bytes = n.png || n.data;
+    return bytes ? `${n.kind}|${r}|${sha1(bytes)}|${n.svg ? sha1(n.svg) : ""}` : null;
+  }
+  if (n.kind === "text" && n.role !== "title") return `text|${r}|${JSON.stringify(n.runs)}`;
+  if (n.kind === "box") return `box|${r}|${JSON.stringify([n.fill, n.border, n.sides, n.radius, n.shadow])}`;
+  return null;
+}
+
+// Signatures present on every scene (when there are at least two).
+export function repeatedSignatures(scenes) {
+  if (scenes.length < 2) return new Set();
+  const counts = new Map();
+  for (const s of scenes) {
+    for (const sig of new Set(s.nodes.map(nodeSignature).filter(Boolean))) counts.set(sig, (counts.get(sig) || 0) + 1);
+  }
+  return new Set([...counts].filter(([, n]) => n === scenes.length).map(([sig]) => sig));
 }
 
 export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, codeStore, screenshots = false, deps = {} }) {
@@ -57,6 +84,18 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
   // static layout's warnings.
   let fromMarkdown = null;
 
+  // Elements every slide shares go on the slide master once.
+  const rendered = captured.slides.filter((s) => !s.error);
+  const repeated = repeatedSignatures(rendered);
+  let masterShapes = [];
+  if (repeated.size) {
+    const first = rendered[0];
+    const shared = first.nodes.filter((n) => repeated.has(nodeSignature(n)));
+    for (const n of shared) if (n.kind === "raster") console.warn(`Notice: slide master: ${n.label} exported as a picture (${n.reason}).`);
+    masterShapes = shared.flatMap((n) => shapesOf(n, unitsFor(first, style.geometry), sceneStyle));
+    for (const s of rendered) s.nodes = s.nodes.filter((n) => !repeated.has(nodeSignature(n)));
+  }
+
   const specs = [];
   const shots = [];
   for (const scene of captured.slides) {
@@ -78,5 +117,5 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
     shots.push(scene.screenshot || null);
   }
   const translatedCharts = specs.reduce((n, s) => n + (s.shapes || []).filter((x) => x.kind === "chart").length, 0);
-  return { specs, style, screenshots: shots, translatedCharts };
+  return { specs, style, screenshots: shots, translatedCharts, masterShapes };
 }

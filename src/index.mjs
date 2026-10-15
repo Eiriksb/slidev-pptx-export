@@ -83,6 +83,7 @@ export async function convert(options) {
     timestamps: config.timestamps === true,
     // Drawn bottom-left on every slide via the slide master.
     logo: config.logo ? { path: config.logo.path, box: style.geometry.logo } : null,
+    masterShapes: rendered ? rendered.masterShapes : [],
   });
 
   const outputPath = resolve(options.outputPath || `${basename(inputPath, extname(inputPath))}-editable.pptx`);

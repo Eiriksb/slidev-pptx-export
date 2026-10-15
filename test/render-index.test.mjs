@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderSpecs } from "../src/render/index.mjs";
+import { renderSpecs, nodeSignature, repeatedSignatures } from "../src/render/index.mjs";
 import { mergeConfig } from "../src/config.mjs";
 import { splitSlides, parseSlide } from "../src/parse.mjs";
 
@@ -134,4 +134,47 @@ test("a resolver's malformed result warns and keeps the chart drawn on the page"
   const { result, warnings } = await withWarnings(() => renderSpecs(args));
   assert.deepEqual(result.specs[0].shapes.find((s) => s.kind === "chart").chart.series.map((s) => s.name), ["Page"]);
   assert.equal(warnings.filter((w) => /^Warning: chart resolver ExampleChart failed \(/.test(w) && w.endsWith("using the chart drawn on the page.")).length, 1, warnings.join("\n"));
+});
+
+test("an element drawn identically on every slide moves to the slide master", async () => {
+  const logo = () => ({ kind: "image", id: 9, rect: { x: 48, y: 498, w: 95, h: 26 }, src: "/logo.png", format: "png", fit: "fill", natural: null, alt: "Logo", border: null, shadow: null, opacity: 1, data: Buffer.from("same"), ext: "png" });
+  const only = { ...logo(), rect: { x: 300, y: 300, w: 20, h: 20 } };
+  const { args } = setup("# A\n\n---\n\n# B\n", { slides: [scene(1, 0, "A", [logo(), only]), scene(2, 1, "B", [logo()])] });
+  const { result } = await withWarnings(() => renderSpecs(args));
+  assert.equal(result.masterShapes.length, 1);
+  assert.equal(result.masterShapes[0].alt, "Logo");
+  assert.deepEqual(result.specs.map((s) => s.shapes.length), [1, 0]);
+  const single = setup("# A\n", { slides: [scene(1, 0, "A", [logo()])] });
+  assert.deepEqual((await withWarnings(() => renderSpecs(single.args))).result.masterShapes, []);
+});
+
+test("a node's signature is its kind, rect (to 0.5 px) and content; titles and bytes-less images have none", () => {
+  const img = (rect, data, svg) => ({ kind: "image", rect, data: Buffer.from(data), ...(svg ? { svg: Buffer.from(svg) } : {}) });
+  const at = { x: 10, y: 20, w: 30, h: 40 };
+  assert.equal(nodeSignature(img(at, "a")), nodeSignature(img({ x: 10.2, y: 19.8, w: 30, h: 40.1 }, "a")));
+  assert.notEqual(nodeSignature(img(at, "a")), nodeSignature(img({ ...at, x: 11 }, "a")));
+  assert.notEqual(nodeSignature(img(at, "a")), nodeSignature(img(at, "b")));
+  assert.notEqual(nodeSignature(img(at, "a")), nodeSignature(img(at, "a", "<svg/>")));
+  assert.equal(nodeSignature({ kind: "image", rect: at }), null);
+  assert.equal(nodeSignature({ kind: "text", role: "title", rect: at, runs: [run("T")] }), null);
+  assert.notEqual(nodeSignature({ kind: "text", rect: at, runs: [run("A")] }), nodeSignature({ kind: "text", rect: at, runs: [run("B")] }));
+  assert.equal(nodeSignature({ kind: "missing", src: "x" }), null);
+});
+
+test("a signature is repeated only when every scene has it, and there are at least two scenes", () => {
+  const note = (text) => ({ kind: "text", rect: { x: 800, y: 520, w: 100, h: 12 }, runs: [run(text)] });
+  const sig = nodeSignature(note("Confidential"));
+  assert.deepEqual([...repeatedSignatures([{ nodes: [note("Confidential")] }, { nodes: [note("Confidential"), note("Other")] }])], [sig]);
+  assert.equal(repeatedSignatures([{ nodes: [note("Confidential")] }, { nodes: [note("Other")] }]).size, 0);
+  assert.equal(repeatedSignatures([{ nodes: [note("Confidential")] }]).size, 0);
+});
+
+test("a repeated picture is announced once, for the slide master; a failed slide neither counts nor blocks it", async () => {
+  const raster = () => ({ kind: "raster", id: 1, rect: { x: 10, y: 500, w: 40, h: 20 }, reason: "canvas", label: "canvas", alt: "", png: Buffer.from("png") });
+  const { args } = setup("# A\n\n---\n\n# B\n\n---\n\n# C\n", { slides: [scene(1, 0, "A", [raster()]), { index: 2, sourceIndex: 1, error: "Timeout" }, scene(3, 2, "C", [raster()])] });
+  const { result, warnings } = await withWarnings(() => renderSpecs(args));
+  assert.deepEqual(warnings.filter((w) => w.startsWith("Notice")), ["Notice: slide master: canvas exported as a picture (canvas)."]);
+  assert.equal(result.masterShapes.length, 1);
+  assert.equal(result.masterShapes[0].kind, "image");
+  assert.deepEqual(result.specs.map((s) => s.shapes.length), [0, 0, 0]);
 });

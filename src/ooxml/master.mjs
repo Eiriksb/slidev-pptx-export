@@ -104,7 +104,7 @@ const BODY_STYLE = `<p:bodyStyle>${BODY_LEVELS.map(
 const OTHER_STYLE =
   `<p:otherStyle><a:defPPr><a:defRPr lang="en-US"/></a:defPPr><a:lvl1pPr marL="0" ${P_ATTRS}>${defRPr(18)}</a:lvl1pPr></p:otherStyle>`;
 
-export function masterXml({ geometry: g, ctx, layoutIds, logo }) {
+export function masterXml({ geometry: g, ctx, layoutIds, logo, extra = "" }) {
   const title = placeholderXml({
     id: 2, name: "Title Placeholder 1", ph: { type: "title" }, box: g.title, ctx,
     paras: [{ runs: [{ text: TITLE_PROMPT }] }], body: { anchor: "b", autofit: "norm" },
@@ -122,7 +122,7 @@ export function masterXml({ geometry: g, ctx, layoutIds, logo }) {
   const ids = layoutIds.map(({ id, rId }) => `<p:sldLayoutId id="${id}" r:id="${rId}"/>`).join("");
   return (
     `${XML_DECL}<p:sldMaster ${NS_PML}><p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg>` +
-    `<p:spTree>${SP_TREE_HEADER}${title}${body}${pic}</p:spTree></p:cSld>${CLR_MAP}` +
+    `<p:spTree>${SP_TREE_HEADER}${title}${body}${pic}${extra}</p:spTree></p:cSld>${CLR_MAP}` +
     `<p:sldLayoutIdLst>${ids}</p:sldLayoutIdLst><p:txStyles>${TITLE_STYLE}${BODY_STYLE}${OTHER_STYLE}</p:txStyles></p:sldMaster>`
   );
 }

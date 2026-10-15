@@ -84,5 +84,11 @@ test("ExampleChart is a native, editable chart from the page itself when no reso
 test("the SVG logo is exported as an SVG picture with a PNG fallback", deckOpts, async () => {
   const { z } = await exportInnotek("innotek-svg.pptx");
   assert.ok(z.names.some((n) => /^ppt\/media\/image\d+\.svg$/.test(n)));
-  assert.match(z.text("ppt/slides/slide2.xml"), /<asvg:svgBlip /);
+  assert.match(z.text("ppt/slideMasters/slideMaster1.xml"), /<asvg:svgBlip /);
+});
+
+test("the footer logo is drawn once, on the slide master", deckOpts, async () => {
+  const { z } = await exportInnotek("innotek-master.pptx");
+  assert.match(z.text("ppt/slideMasters/slideMaster1.xml"), /<asvg:svgBlip /);
+  for (let i = 1; i <= 7; i++) assert.doesNotMatch(z.text(`ppt/slides/slide${i}.xml`), /<asvg:svgBlip /, `slide ${i}`);
 });

@@ -175,3 +175,18 @@ test("SVG pictures carry the SVG next to a PNG fallback", async () => {
   assert.match(z.text("[Content_Types].xml"), /<Default Extension="svg" ContentType="image\/svg\+xml"\/>/);
   assert.match(z.text("ppt/slides/slide1.xml"), /<a:blip r:embed="rId2"><a:extLst><a:ext uri="\{96DAC541-7B7A-43D3-8B79-37D633B846F1\}"><asvg:svgBlip xmlns:asvg="http:\/\/schemas.microsoft.com\/office\/drawing\/2016\/SVG\/main" r:embed="rId3"\/><\/a:ext><\/a:extLst><\/a:blip>/);
 });
+
+test("master shapes are drawn on the slide master, with their media related from it", async () => {
+  const masterShapes = [
+    { kind: "image", x: 0.5, y: 6.9, w: 1, h: 0.3, data: readFileSync(PIC), ext: "png", alt: "Logo" },
+    { kind: "text", x: 11, y: 7, w: 2, h: 0.3, geometry: "rect", anchor: "t", inset: 0, paras: [{ runs: [{ text: "Confidential" }] }] },
+  ];
+  const buffer = await writePptx([{ layout: "blank", shapes: [] }], { ...DECK, logo: null, masterShapes });
+  assert.deepEqual(await lintPackage(buffer), []);
+  const z = await unzip(buffer);
+  const master = z.text("ppt/slideMasters/slideMaster1.xml");
+  assert.match(master, /<p:cNvPr id="5" name="Picture 5" descr="Logo"\/>/);
+  assert.match(master, /<a:t>Confidential<\/a:t>/);
+  assert.match(z.text("ppt/slideMasters/_rels/slideMaster1.xml.rels"), /Target="\.\.\/media\/image1\.png"/);
+  assert.doesNotMatch(z.text("ppt/slides/slide1.xml"), /Confidential/);
+});

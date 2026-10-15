@@ -1,6 +1,6 @@
 {
   "name": "slidev-pptx-export",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Convert a Slidev markdown deck into a fully editable native .pptx - real PowerPoint text boxes, tables, shapes and charts, not a screenshot-per-slide export.",
   "type": "module",
   "main": "src/index.mjs",

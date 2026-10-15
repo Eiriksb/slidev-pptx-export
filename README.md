@@ -70,16 +70,32 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
 
 - Text keeps its rendered font, size, weight, color, letter spacing and position; slide
   titles still go into title placeholders.
-- Boxes with a background, border, rounded corners or shadow (cards, callouts) become native
-  shapes; lists get native bullets in their rendered colors.
-- Images become native pictures. Anything PowerPoint can't express natively is drawn as a
-  picture of just that element, with a notice naming the slide.
+- Boxes with a background, border, rounded corners, shadow or gradient (cards, callouts)
+  become native shapes; lists get native bullets in their rendered colors; tables become
+  native tables with each cell's own fill and borders; code blocks keep their syntax colors
+  (a block that scrolls or wraps in the page is a picture instead).
+- Chart.js bar charts (e.g. through vue-chartjs) become native, editable charts with the
+  page's data, colors, axis range and number format; horizontal bars keep their order. Only
+  charts PowerPoint can draw faithfully are native: mixed chart types, non-numeric data,
+  logarithmic or second value axes, stack groups, chart titles, scripted or per-bar colors,
+  and rotated or translucent charts are pictures. A `chartResolvers` entry returning
+  `kind: "barchart"` for the component still wins.
+- Images become native pictures; one that didn't load is skipped, with a notice. SVG images
+  stay vector in PowerPoint 2016+ (with a PNG fallback elsewhere) when their box has the SVG's
+  aspect, and are pictures otherwise. A `url()` background is native only when it is centred
+  cover/contain or 100% 100%, and a radial gradient whose shape differs a lot from its box
+  becomes a picture.
+- Elements drawn identically on every slide, like a footer logo, go on the slide master once,
+  unless slide content covers them.
+- Anything PowerPoint can't express natively (blur and other CSS filters, masks, inline SVG
+  drawings, other canvases, and the cases above) is drawn as a picture of just that element,
+  with a notice naming the slide.
 - `colors` and `fonts` in `pptx.config.mjs` still build the theme (rendered colors that match
   become theme colors); `logo`, `eyebrowClass` and `cssVarColors` aren't needed.
   `render: { timeout }` sets the per-slide wait (default 15000 ms). The first slide also waits
   for Slidev's cold start (Vite dependency optimisation), so slow machines or heavy decks may
   need a larger timeout.
-- A slide that can't be rendered falls back to the markdown export, with a warning.
+- A slide Slidev can't load or render falls back to the markdown export, with a warning.
 
 Render mode needs the deck's dependencies installed (`npm install` in the deck folder) and
 takes roughly 10–30 seconds per deck.
@@ -144,7 +160,12 @@ renders as a labeled placeholder box instead of failing the whole export.
 ```bash
 npm test         # unit tests, package lint, kitchen-sink fixture export
 npm run render   # LibreOffice render of the fixture (and ../innotek-SlideDevBase if present) to out/render/
+npm run test:render         # browser tests (needs playwright-chromium; skips otherwise)
+npm run render -- --render  # render-mode export + visual check against Slidev's own screenshots
 ```
+
+The browser tests (`test/render/`) use `playwright-chromium` and `chart.js`, both
+devDependencies; `chart.js` is only there to draw test charts. `npm test` needs no browser.
 
 ## What it doesn't do
 
@@ -152,7 +173,7 @@ This is a markdown -> pptx layout engine tuned for the patterns Slidev decks com
 not a full HTML/CSS renderer. Arbitrary nested HTML, custom Vue components without a
 resolver, and complex CSS layouts fall back to a flattened, best-effort text rendering.
 
-Only PNG/JPEG/GIF images and logos embed natively; an SVG image exports as a labeled
-placeholder and an SVG logo is skipped. A `layout: section` slide whose body is more than
+In the default mode only PNG/JPEG/GIF images and logos embed natively; an SVG image exports
+as a labeled placeholder and an SVG logo is skipped (`--render` embeds SVG images, see above). A `layout: section` slide whose body is more than
 plain text/bullets (a table, chart or card row) uses the *Title Only* layout instead of
 *Section Header*, since that content doesn't fit the section body placeholder.

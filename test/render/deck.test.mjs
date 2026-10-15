@@ -92,3 +92,15 @@ test("the footer logo is drawn once, on the slide master", deckOpts, async () =>
   assert.match(z.text("ppt/slideMasters/slideMaster1.xml"), /<asvg:svgBlip /);
   for (let i = 1; i <= 7; i++) assert.doesNotMatch(z.text(`ppt/slides/slide${i}.xml`), /<asvg:svgBlip /, `slide ${i}`);
 });
+
+test("the innotek deck needs no picture fallbacks", deckOpts, async () => {
+  const notices = [];
+  const orig = console.warn;
+  console.warn = (...a) => notices.push(a.join(" "));
+  try {
+    await exportInnotek("innotek-no-pictures.pptx");
+  } finally {
+    console.warn = orig;
+  }
+  assert.deepEqual(notices.filter((n) => / exported as a picture /.test(n)), []);
+});

@@ -12,7 +12,7 @@ export async function captureDeck({ baseUrl, chromium, timeout = 15000, screensh
   try {
     const page = await browser.newPage({ viewport: { width: 980, height: 552 }, deviceScaleFactor: 2 });
     page.setDefaultTimeout(timeout);
-    await page.goto(`${baseUrl}/1?print`, { waitUntil: "networkidle" });
+    await open(page, `${baseUrl}/1?print`);
     try {
       await page.waitForFunction(() => window.__slidev__?.nav?.total > 0 && !!document.querySelector(".slidev-page"));
     } catch {
@@ -44,13 +44,14 @@ export async function captureDeck({ baseUrl, chromium, timeout = 15000, screensh
 }
 
 async function captureSlide(page, baseUrl, s, canvas, screenshots) {
-  await page.goto(`${baseUrl}/${s.no}?print`, { waitUntil: "networkidle" });
+  await open(page, `${baseUrl}/${s.no}?print`);
   const sel = `.slidev-page-${s.no}`;
   await page.waitForFunction((pageSel) => {
     const p = document.querySelector(pageSel);
     return !!p && p.getBoundingClientRect().width > 0;
   }, sel);
   await page.evaluate(() => document.fonts.ready.then(() => true));
+  await assertSlideLoaded(page, sel);
   await waitForStableCanvases(page);
   const screenshot = screenshots ? await page.locator(sel).screenshot({ animations: "disabled" }) : null;
   await page.addScriptTag({ content: EXTRACT });
@@ -62,6 +63,21 @@ async function captureSlide(page, baseUrl, s, canvas, screenshots) {
   // Last: it hides the slide's contents.
   if (scene.background.raster) scene.background.png = await backgroundShot(page, sel);
   return { ...scene, index: s.no, sourceIndex: s.sourceIndex, notes: s.notes, screenshot };
+}
+
+// /<n>?print has every slide's resources in the DOM, so one image that never answers would keep
+// "networkidle" from ever settling. Wait for the DOM, then give the network a few seconds to quiet
+// down; the callers' own readiness checks decide whether the page is usable.
+async function open(page, url) {
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {});
+}
+
+// When a slide's module fails (a missing asset, a template error, a broken layout) Slidev draws its
+// SlideError layout instead, which has no stable class - only this text.
+async function assertSlideLoaded(page, sel) {
+  const failed = await page.evaluate((pageSel) => /An error occurred on this slide|Failed to fetch this slide/.test(document.querySelector(pageSel).textContent), sel);
+  if (failed) throw new Error("Slidev could not load this slide (see its terminal output)");
 }
 
 // Charts animate in; wait until every canvas stops changing (up to ~5 s).
@@ -97,8 +113,11 @@ async function fetchBytes(page, src) {
   return Buffer.from(await res.body());
 }
 
-// Image bytes for the writer; if they can't be fetched the element is drawn as a picture.
+// Image bytes for the writer. An <img> that can't be fetched is drawn as a picture; a CSS background
+// (the extractor gives those no natural size) is dropped, since a picture of its container would
+// bake the container's text in.
 async function loadImage(page, node) {
+  const isBackground = !node.natural;
   try {
     node.data = await fetchBytes(page, node.src);
     node.ext = node.format;
@@ -108,6 +127,10 @@ async function loadImage(page, node) {
     }
   } catch (err) {
     delete node.data;
+    if (isBackground) {
+      Object.assign(node, { kind: "missing", label: node.alt || node.src });
+      return;
+    }
     Object.assign(node, { kind: "raster", reason: `image not fetched: ${err.message}`, label: node.alt || node.src, png: await elementShot(page, node.id) });
   }
 }

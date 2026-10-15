@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { slidevCli, startDeckServer } from "../src/render/server.mjs";
 import { loadChromium } from "../src/render/browser.mjs";
 
@@ -58,6 +58,39 @@ test("starts the deck's Slidev on a free local port and stops it", async () => {
   assert.equal(server.version, "52.0.0-test");
   await server.stop();
   await assert.rejects(fetch(server.url));
+});
+
+test("a relative deck folder still finds a @slidev/cli hoisted into a parent folder", () => {
+  const { root, deckDir } = fakeDeck(SERVES, { hoisted: true });
+  const expected = join(root, "node_modules/@slidev/cli/bin/slidev.mjs");
+  const cwd = process.cwd();
+  try {
+    process.chdir(deckDir);
+    assert.equal(slidevCli(".").bin, expected);
+    process.chdir(join(root, "decks"));
+    assert.equal(slidevCli("talk").bin, expected);
+  } finally {
+    process.chdir(cwd);
+  }
+  assert.equal(slidevCli(relative(cwd, deckDir)).bin, expected);
+});
+
+test("a @slidev/cli without a usable bin doesn't hide a good one further up", () => {
+  const { root, deckDir } = fakeDeck(SERVES, { hoisted: true });
+  const broken = join(deckDir, "node_modules", "@slidev", "cli");
+  mkdirSync(broken, { recursive: true });
+  writeFileSync(join(broken, "package.json"), JSON.stringify({ name: "@slidev/cli", version: "1.0.0" }));
+  assert.deepEqual(slidevCli(deckDir), { bin: join(root, "node_modules/@slidev/cli/bin/slidev.mjs"), version: "52.0.0-test" });
+  // ...and with nothing usable anywhere there is no CLI.
+  writeFileSync(join(root, "node_modules", "@slidev", "cli", "package.json"), JSON.stringify({ name: "@slidev/cli", version: "1.0.0" }));
+  assert.equal(slidevCli(deckDir), null);
+});
+
+test("a Slidev that can't be spawned rejects with a clear message", async () => {
+  // The deck folder doesn't exist, so spawning in it fails; the CLI is found in its parent.
+  const { root } = fakeDeck(SERVES);
+  const inputPath = join(root, "no-such-folder", "slides.md");
+  await assert.rejects(startDeckServer({ inputPath, timeout: 5000 }), /Slidev could not be started: .*ENOENT/);
 });
 
 test("loadChromium explains how to install Playwright when it's missing", async () => {

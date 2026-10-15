@@ -43,10 +43,12 @@ export function tableStylesXml() {
 // itself, so nothing may come from a style.
 export const NO_STYLE = "{2D5ABB26-0587-4C30-8999-92F81FD0307C}";
 
+// A side without a border writes no line element at all: an explicit noFill would erase a
+// neighbouring cell's rule on a shared edge under border-collapse. A width that rounds to zero
+// EMU (a hairline too thin to store) counts as no border.
 function lnXml(tag, side) {
-  return side && side.width > 0
-    ? `<a:${tag} w="${Math.round(side.width * 12700)}">${solidFill(side.color, side.alpha)}</a:${tag}>`
-    : `<a:${tag} w="0"><a:noFill/></a:${tag}>`;
+  const w = side ? Math.round(side.width * 12700) : 0;
+  return w > 0 ? `<a:${tag} w="${w}">${solidFill(side.color, side.alpha)}</a:${tag}>` : "";
 }
 
 // A cell is a list of paragraphs (deck-styled tables, formatting from the table style) or, in

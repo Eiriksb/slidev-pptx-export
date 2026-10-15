@@ -64,8 +64,49 @@ test("plain tables write each cell's fill, borders, margins, anchor and merges, 
   };
   const xml = tableXml(PLAIN, ctx);
   assert.match(xml, /^<a:tbl><a:tblPr bandRow="0"><a:tableStyleId>\{2D5ABB26-0587-4C30-8999-92F81FD0307C\}<\/a:tableStyleId><\/a:tblPr>/);
-  assert.match(xml, /<a:tc gridSpan="2"><a:txBody>[\s\S]*?<\/a:txBody><a:tcPr marL="91440" marR="91440" marT="45720" marB="45720" anchor="ctr"><a:lnL w="0"><a:noFill\/><\/a:lnL><a:lnR w="0"><a:noFill\/><\/a:lnR><a:lnT w="0"><a:noFill\/><\/a:lnT><a:lnB w="12700"><a:solidFill><a:schemeClr val="accent4"\/><\/a:solidFill><\/a:lnB><a:solidFill><a:srgbClr val="EEF4F0"\/><\/a:solidFill><\/a:tcPr><\/a:tc><a:tc hMerge="1">/);
+  assert.match(xml, /<a:tc gridSpan="2"><a:txBody>[\s\S]*?<\/a:txBody><a:tcPr marL="91440" marR="91440" marT="45720" marB="45720" anchor="ctr"><a:lnB w="12700"><a:solidFill><a:schemeClr val="accent4"\/><\/a:solidFill><\/a:lnB><a:solidFill><a:srgbClr val="EEF4F0"\/><\/a:solidFill><\/a:tcPr><\/a:tc><a:tc hMerge="1">/);
   assert.match(xml, /<a:solidFill><a:schemeClr val="bg2"><a:alpha val="50000"\/><\/a:schemeClr><\/a:solidFill><\/a:tcPr><\/a:tc><\/a:tr><\/a:tbl>$/);
   const buffer = await writePptx([{ layout: "blank", shapes: [PLAIN] }], DECK);
+  assert.deepEqual(await lintPackage(buffer), []);
+});
+
+test("plain tables: row spans, bare object and array cells, alpha and sub-pixel borders", async () => {
+  const EDGE = {
+    kind: "table", x: 0, y: 0, w: 4, h: 1.5, variant: "plain", colW: [2, 2], rowH: [0.5, 0.5, 0.5],
+    rows: [
+      [{ paras: cell("span"), rowSpan: 2 }, { paras: cell("sub"), borders: { r: { width: 0.00001, color: "accent4" } } }],
+      [{ paras: [], vMerge: true }, { paras: cell("alpha"), borders: { t: { width: 1, color: "accent4", alpha: 0.5 } } }],
+      [cell("bare"), { paras: cell("obj") }],
+    ],
+  };
+  const xml = tableXml(EDGE, ctx);
+  const doc = parseXml(`<x xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${xml}</x>`);
+  const [span, sub, covered, alpha, bare, obj] = byLocal(doc, "tc");
+  const tcPr = (tc) => byLocal(tc, "tcPr")[0];
+  const children = (el) => [...el.childNodes].filter((n) => n.nodeType === 1).map((n) => n.localName);
+
+  assert.equal(span.getAttribute("rowSpan"), "2");
+  assert.equal(covered.getAttribute("vMerge"), "1");
+  // An object cell with no margin, anchor or borders writes a bare tcPr holding only the fill.
+  assert.equal(tcPr(obj).attributes.length, 0);
+  assert.deepEqual(children(tcPr(obj)), ["noFill"]);
+  assert.equal(tcPr(span).attributes.length, 0);
+  assert.deepEqual(children(tcPr(span)), ["noFill"]);
+  // A bare paragraph-array cell takes the table's shared margins and nothing else.
+  assert.equal(tcPr(bare).getAttribute("marL"), "91440");
+  assert.deepEqual(children(tcPr(bare)), []);
+  // A border of 0.00001pt rounds to zero and writes no line element.
+  assert.equal(byLocal(sub, "lnR").length, 0);
+  assert.deepEqual(children(tcPr(sub)), ["noFill"]);
+  // Only the sides that have a border get a line element, in lnL, lnR, lnT, lnB order, before the fill.
+  assert.deepEqual(children(tcPr(alpha)), ["lnT", "noFill"]);
+  // Alpha sits inside the line's color.
+  const lnT = byLocal(alpha, "lnT")[0];
+  assert.equal(lnT.getAttribute("w"), "12700");
+  const a = byLocal(lnT, "alpha")[0];
+  assert.equal(a.getAttribute("val"), "50000");
+  assert.equal(a.parentNode.localName, "schemeClr");
+  assert.equal(a.parentNode.getAttribute("val"), "accent4");
+  const buffer = await writePptx([{ layout: "blank", shapes: [EDGE] }], DECK);
   assert.deepEqual(await lintPackage(buffer), []);
 });

@@ -34,7 +34,16 @@
   "homepage": "https://github.com/Eiriksb/slidev-pptx-export#readme",
   "scripts": {
     "test": "node --test test/*.test.mjs",
+    "test:render": "node --test test/render/*.test.mjs",
     "render": "node scripts/render.mjs"
+  },
+  "peerDependencies": {
+    "playwright": ">=1.40.0",
+    "playwright-chromium": ">=1.40.0"
+  },
+  "peerDependenciesMeta": {
+    "playwright": { "optional": true },
+    "playwright-chromium": { "optional": true }
   },
   "dependencies": {
     "image-size": "^2.0.4",
@@ -42,6 +51,7 @@
     "jszip": "^3.10.1"
   },
   "devDependencies": {
-    "@xmldom/xmldom": "^0.9.12"
+    "@xmldom/xmldom": "^0.9.12",
+    "playwright-chromium": "^1.64.1"
   }
 }

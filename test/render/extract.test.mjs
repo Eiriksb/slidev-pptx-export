@@ -207,3 +207,69 @@ test("code blocks: the token spans' own decorations count, hidden spans are skip
   assert.deepEqual(code.lines.map((l) => l.map((r) => r.text)), [["a"], [], ["b"]]);
   assert.equal(code.lines[0][0].underline, true);
 });
+
+test("a code block that scrolls inside its panel is a picture; with overflow visible it stays native", opts, async () => {
+  const long = "x".repeat(120);
+  const pre = (style, body = long) => `<pre style="margin:0;font:13px/18px monospace;${style}">${body}</pre>`;
+  const wide = await extractHtml(browser, pre("width:300px;overflow:auto"));
+  assert.deepEqual(wide.nodes.map((n) => [n.kind, n.reason]), [["raster", "code overflows its panel"]]);
+  const tall = await extractHtml(browser, pre("max-height:36px;overflow:auto", "1\n2\n3\n4\n5"));
+  assert.deepEqual(tall.nodes.map((n) => [n.kind, n.reason]), [["raster", "code overflows its panel"]]);
+  const visible = await extractHtml(browser, pre("width:300px;overflow:visible"));
+  assert.deepEqual(visible.nodes.map((n) => n.kind), ["code"]);
+  const fits = await extractHtml(browser, pre("width:300px;overflow:auto", "short"));
+  assert.deepEqual(fits.nodes.map((n) => n.kind), ["code"]);
+});
+
+test("a pre-wrap code block that wraps is a picture; one that fits stays native", opts, async () => {
+  const pre = (body) => `<pre style="margin:0;width:100px;white-space:pre-wrap;font:13px/18px monospace">${body}</pre>`;
+  const wraps = await extractHtml(browser, pre("aaaa bbbb cccc dddd eeee ffff"));
+  assert.deepEqual(wraps.nodes.map((n) => [n.kind, n.reason]), [["raster", "wrapped code"]]);
+  const blankLine = await extractHtml(browser, pre("aaaa\n\nbbbb cccc dddd eeee ffff"));
+  assert.deepEqual(blankLine.nodes.map((n) => [n.kind, n.reason]), [["raster", "wrapped code"]], "a blank line must not hide the wrap");
+  const fits = await extractHtml(browser, pre("aaaa\n\nbbbb"));
+  assert.deepEqual(fits.nodes.map((n) => n.kind), ["code"]);
+});
+
+test("code with line-height normal gets the browser's line pitch, not a guessed multiple of the font size", opts, async () => {
+  const s = await extractHtml(browser, '<pre style="margin:0;font:13px monospace;line-height:normal">a\nb\n\nd</pre>');
+  const code = s.nodes.find((n) => n.kind === "code");
+  assert.equal(code.lines.length, 4);
+  assert.ok(Math.abs(code.lineHeight - code.rect.h / 4) <= 1, `lineHeight ${code.lineHeight} vs ${code.rect.h / 4}`);
+});
+
+test("tokens inside dimmed spans carry the spans' opacity in their color alpha", opts, async () => {
+  const s = await extractHtml(browser,
+    '<pre style="margin:0;font:13px/18px monospace"><code><span style="opacity:.3"><span style="color:#1a589f">dim</span></span> bright\n</code></pre>');
+  const code = s.nodes.find((n) => n.kind === "code");
+  assert.deepEqual(code.lines[0].map((r) => [r.text, r.color.hex, r.color.alpha]), [["dim", "1A589F", 0.3], [" bright", "000000", 1]]);
+});
+
+test("a display:none cell is left out of the grid and its text out of the table", opts, async () => {
+  const s = await extractHtml(browser, '<table style="font:14px/20px Arial"><tr><td>a</td><td style="display:none">HID</td><td>c</td></tr></table>');
+  const t = s.nodes.find((n) => n.kind === "table");
+  assert.equal(t.colW.length, 2);
+  assert.ok(t.colW.every((w) => w > 0), t.colW.join());
+  assert.deepEqual(t.rows[0].map(textOf), ["a", "c"]);
+  assert.ok(!JSON.stringify(s.nodes).includes("HID"));
+});
+
+test("tabs in code expand to the next tab stop, counted across the spans of a line", opts, async () => {
+  const s = await extractHtml(browser,
+    '<pre style="margin:0;font:13px/18px monospace;tab-size:2">\ta\n<span>b</span>\t<span>c</span>\n\t\td</pre>');
+  const code = s.nodes.find((n) => n.kind === "code");
+  assert.deepEqual(code.lines.map((l) => l.map((r) => r.text).join("")), ["  a", "b c", "    d"]);
+  const dflt = await extractHtml(browser, '<pre style="margin:0;font:13px/18px monospace">\ta</pre>');
+  assert.equal(dflt.nodes.find((n) => n.kind === "code").lines[0][0].text, "        a");
+});
+
+test("a column no cell starts in shares the gap, and an empty cell still gets a line height from its font", opts, async () => {
+  const s = await extractHtml(browser,
+    '<table style="font:10px Arial"><tr><td colspan="2">A</td><td>B</td></tr><tr><td colspan="2"></td><td>D</td></tr></table>');
+  const t = s.nodes.find((n) => n.kind === "table");
+  assert.equal(t.colW.length, 3);
+  assert.ok(t.colW.every((w) => w > 0), t.colW.join());
+  assert.ok(Math.abs(t.colW.reduce((a, b) => a + b, 0) - t.rect.w) < 0.1, `${t.colW.join()} vs ${t.rect.w}`);
+  assert.ok(Math.abs(t.colW[0] - t.colW[1]) < 0.1, "the two spanned columns split evenly");
+  assert.deepEqual([t.rows[1][0].runs, t.rows[1][0].lineHeight], [[], 12]);
+});

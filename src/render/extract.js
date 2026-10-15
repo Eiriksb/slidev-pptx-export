@@ -264,6 +264,17 @@
         if (!fmt) return "image format";
         if (op < 0.999) return "image opacity";
       }
+      // Code is drawn as unwrapped text over its panel, so a block that scrolls inside the panel
+      // (the browser clips it) or wraps (the browser breaks lines the text box won't) is a picture.
+      if (tag === "pre") {
+        if ((cs.overflowX !== "visible" || cs.overflowY !== "visible") && (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1)) {
+          return "code overflows its panel";
+        }
+        if (/^(pre-wrap|break-spaces|pre-line)$/.test(cs.whiteSpace)) {
+          const rows = measure([...el.childNodes]);
+          if (rows && rows.lines > codeLines(el, cs, null).filter((l) => l.length).length) return "wrapped code";
+        }
+      }
       if (cs.filter && cs.filter !== "none") return "CSS filter";
       if (cs.backdropFilter && cs.backdropFilter !== "none") return "backdrop-filter";
       const mask = cs.maskImage || cs.webkitMaskImage;
@@ -498,14 +509,16 @@
       if (items.length && onCanvas(box)) nodes.push({ kind: "list", rect: box, items: items.map(({ lastTop, ...it }) => it), opacity: op });
     }
 
-    // True when the element, or an ancestor below `root`, is not drawn: display none, hidden or
-    // fully transparent.
-    function hiddenWithin(el, root) {
+    // The opacity an element is drawn with inside `root`: the product of its own and its ancestors'
+    // below `root` (exclusive), 0 when any of them is not drawn.
+    function opacityWithin(el, root) {
+      let a = 1;
       for (let e = el; e && e !== root; e = e.parentElement) {
         const s = getComputedStyle(e);
-        if (s.display === "none" || s.visibility === "hidden" || parseFloat(s.opacity) === 0) return true;
+        if (s.display === "none" || s.visibility === "hidden") return 0;
+        a *= parseFloat(s.opacity);
       }
-      return false;
+      return a;
     }
 
     function cellBorders(cs) {
@@ -555,6 +568,7 @@
         grid[r] = grid[r] || [];
         let c = 0;
         for (const td of tr.cells) {
+          if (getComputedStyle(td).display === "none") continue;
           while (grid[r][c]) c++;
           const cspan = Math.max(1, td.colSpan || 1);
           const rspan = Math.max(1, Math.min(td.rowSpan || 1, rows.length - r));
@@ -620,25 +634,82 @@
       for (const b of later) walk(b, op);
     }
 
-    // A code block: one line of runs per source line, token colors kept, spaces untouched.
-    function codeNode(pre, cs, box, op) {
+    // tab-size in characters: a number as it is, a length divided by the width of one character.
+    function tabWidth(cs) {
+      const n = parseFloat(cs.tabSize);
+      if (!(n > 0)) return 8;
+      if (!/px$/.test(cs.tabSize)) return Math.max(1, Math.round(n));
+      probe.font = `${cs.fontSize} ${cs.fontFamily}`;
+      const ch = probe.measureText("0").width;
+      return ch > 0 ? Math.max(1, Math.round(n / ch)) : 8;
+    }
+
+    // A code block's text as one list of runs per source line: token colors kept (dimmed by the
+    // opacity of the spans around them), tabs expanded to the next tab stop, spaces untouched.
+    // `rects`, when given, receives the first client rect of each source line that has text.
+    function codeLines(pre, cs, rects) {
       const lines = [[]];
+      const tab = tabWidth(cs);
+      const range = document.createRange();
+      let col = 0;
       const walker = document.createTreeWalker(pre, NodeFilter.SHOW_TEXT);
       for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-        if (hiddenWithin(n.parentElement, pre)) continue;
-        const pcs = getComputedStyle(n.parentElement);
-        const style = runStyle(pcs, inheritedDeco(n.parentElement), null);
+        const dim = opacityWithin(n.parentElement, pre);
+        if (!(dim > 0.001)) continue;
+        const style = runStyle(getComputedStyle(n.parentElement), inheritedDeco(n.parentElement), null);
+        if (style.color && dim < 1) style.color = { ...style.color, alpha: Math.round(style.color.alpha * dim * 1000) / 1000 };
+        let offset = 0;
         n.data.split("\n").forEach((part, i) => {
-          if (i > 0) lines.push([]);
-          if (part) lines[lines.length - 1].push({ ...style, text: part });
+          if (i > 0) {
+            lines.push([]);
+            col = 0;
+            offset++;
+          }
+          const start = offset;
+          offset += part.length;
+          if (!part) return;
+          let text = "";
+          for (const ch of part) {
+            if (ch === "\t") {
+              const w = tab - (col % tab);
+              text += " ".repeat(w);
+              col += w;
+            } else {
+              text += ch;
+              col++;
+            }
+          }
+          lines[lines.length - 1].push({ ...style, text });
+          if (rects && !rects[lines.length - 1]) {
+            range.setStart(n, start);
+            range.setEnd(n, offset);
+            const r = range.getClientRects()[0];
+            if (r) rects[lines.length - 1] = r;
+          }
         });
       }
       while (lines.length && !lines[lines.length - 1].length) lines.pop();
-      if (!lines.length) return;
+      return lines;
+    }
+
+    function codeNode(pre, cs, box, op) {
+      // With `line-height: normal` the pitch between lines is measured, from the first and last
+      // source line that have text (blank lines between them have no rect of their own).
       const lh = parseFloat(cs.lineHeight);
+      const rects = lh > 0 ? null : {};
+      const lines = codeLines(pre, cs, rects);
+      if (!lines.length) return;
+      let pitch = r2(lh);
+      if (!(lh > 0)) {
+        const rows = Object.keys(rects).map(Number);
+        const first = rows[0];
+        const last = rows[rows.length - 1];
+        const px = rows.length ? (last > first ? (rects[last].top - rects[first].top) / (last - first) : rects[first].height) : parseFloat(cs.fontSize) * 1.2;
+        pitch = r2(rows.length ? px / scale : px);
+      }
       nodes.push({
         kind: "code", rect: contentBox(pre, cs, box), lines: lines.map((runs) => tidyRuns(runs, { whiteSpace: "pre" })),
-        lineHeight: r2(lh > 0 ? lh : parseFloat(cs.fontSize) * 1.5), opacity: op,
+        lineHeight: pitch, opacity: op,
       });
     }
 

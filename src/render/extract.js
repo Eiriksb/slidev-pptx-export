@@ -413,12 +413,23 @@
       return { src, format, fit };
     }
 
+    // An SVG <img> is exported as the SVG itself, stretched over its box. The page draws the same
+    // only when the box has the SVG's aspect (then fill, contain and cover agree); otherwise the
+    // browser letterboxes, crops or leaves it at natural size, so it stays a picture.
+    function svgFits(el, cs, rc) {
+      if (!/^(fill|contain|cover)$/.test(cs.objectFit)) return false;
+      // A transform turns rc into the rotated hull; the element's own layout size is its box.
+      const box = contentBox(el, cs, transformOf(cs) ? { x: 0, y: 0, w: el.offsetWidth, h: el.offsetHeight } : rc);
+      return box.w > 0 && box.h > 0 && Math.abs(box.w / box.h / (el.naturalWidth / el.naturalHeight) - 1) <= 0.01;
+    }
+
     function rasterReason(el, cs, tag, op, rc) {
       if (RASTER_TAGS[tag]) return RASTER_TAGS[tag];
       if (tag === "img") {
         const fmt = formatOf(el.currentSrc || el.src);
         if (!fmt) return "image format";
         if (op < 0.999) return "image opacity";
+        if (fmt === "svg" && el.complete && el.naturalWidth && !svgFits(el, cs, rc)) return "SVG image fit";
       }
       // Code is drawn as unwrapped text over its panel, so a block that scrolls inside the panel
       // (the browser clips it) or wraps (the browser breaks lines the text box won't) is a picture.
@@ -600,9 +611,7 @@
 
     function imageNode(el, cs, rc, rotate, op) {
       const src = el.currentSrc || el.src;
-      const svg = formatOf(src) === "svg";
-      // An SVG without width/height has no natural size but still draws.
-      if (!el.complete || (!el.naturalWidth && !svg)) {
+      if (!el.complete || !el.naturalWidth) {
         nodes.push({ kind: "missing", label: labelOf(el), src });
         return;
       }

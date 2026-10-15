@@ -63,34 +63,71 @@ test("a hanging image doesn't stall the export, a slide error is a failed slide,
   assert.ok(three.nodes.some((n) => n.kind === "text" && textOf(n) === "Inside"));
 });
 
-test("an SVG image keeps its file next to a 2x PNG at its box, with or without a natural size; one that won't draw is a picture", opts, async (t) => {
+test("an SVG image keeps its file next to a 2x PNG drawn from those bytes; broken ones are skipped", opts, async (t) => {
+  // Chromium gives a viewBox-only SVG and a sizeless one a 300x150 natural size, so a 2:1 box suits both.
   const LOGO = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20"><rect width="40" height="20" fill="#1a833b"/></svg>';
   const SIZED = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="#1a833b"/></svg>';
+  const FAR = '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30"><circle cx="15" cy="15" r="15" fill="#1a589f"/></svg>';
+  const listen = (handler) =>
+    new Promise((resolve) => {
+      const server = createServer(handler);
+      server.listen(0, "127.0.0.1", () => {
+        t.after(() => new Promise((done) => server.close(done)));
+        resolve(server.address().port);
+      });
+    });
+  // A second origin that sends no CORS headers: drawn from the page it would taint the canvas.
+  const farPort = await listen((req, res) => res.writeHead(200, { "content-type": "image/svg+xml" }).end(FAR));
   const html =
     "<!doctype html><html><head><style>body{margin:0}img{display:block}</style><script>" +
     "window.__slidev__ = { nav: { total: 1, slides: [{ no: 1, meta: { slide: { sourceIndex: 0 } } }] }, configs: { canvasWidth: 980, aspectRatio: 16 / 9 } };" +
     "</script></head><body>" +
-    page(1, '<img src="/logo.svg" style="width:100px;height:50px"><img src="/sized.svg" style="width:80px;height:40px"><img src="/bad.svg" style="width:60px;height:30px">') +
+    page(1,
+      '<img src="/logo.svg" style="width:100px;height:50px"><img src="/sized.svg" style="width:80px;height:40px">' +
+        `<img src="http://127.0.0.1:${farPort}/far.svg" style="width:30px;height:30px">` +
+        '<img src="/gone.svg" style="width:60px;height:30px"><img src="/bad.svg" style="width:60px;height:30px"><img src="/empty.svg" style="width:60px;height:30px">') +
     "</body></html>";
-  const files = { "/logo.svg": LOGO, "/sized.svg": SIZED, "/bad.svg": "this is not an svg" };
+  const files = { "/logo.svg": LOGO, "/sized.svg": SIZED, "/bad.svg": "this is not an svg", "/empty.svg": "" };
+  const port = await listen((req, res) => {
+    const path = new URL(req.url, "http://localhost").pathname;
+    if (path === "/1") return void res.writeHead(200, { "content-type": "text/html" }).end(html);
+    if (path in files) return void res.writeHead(200, { "content-type": "image/svg+xml" }).end(files[path]);
+    res.writeHead(404).end("not found");
+  });
+
+  const { slides: [slide] } = await captureDeck({ baseUrl: `http://127.0.0.1:${port}`, chromium, timeout: 15000 });
+  assert.equal(slide.error, undefined);
+  const size = (png) => [png.readUInt32BE(16), png.readUInt32BE(20)];
+  const [logo, sized, far, ...broken] = slide.nodes;
+  assert.deepEqual([logo.kind, logo.format, logo.ext, logo.natural, logo.fit, logo.svg.toString()], ["image", "svg", "png", { w: 300, h: 150 }, "fill", LOGO]);
+  assert.deepEqual(size(logo.data), [200, 100]);
+  assert.deepEqual([sized.kind, sized.natural, sized.svg.toString()], ["image", { w: 40, h: 20 }, SIZED]);
+  assert.deepEqual(size(sized.data), [160, 80]);
+  assert.deepEqual([far.kind, far.svg.toString()], ["image", FAR]);
+  assert.deepEqual(size(far.data), [60, 60]);
+  assert.equal(far.data.subarray(0, 4).toString("hex"), "89504e47");
+  assert.deepEqual(broken.map((n) => [n.kind, n.src.split("/").pop()]), [["missing", "gone.svg"], ["missing", "bad.svg"], ["missing", "empty.svg"]]);
+});
+
+test("an SVG that loaded in the page but whose fetched bytes won't draw is a picture, with a one-line reason", opts, async (t) => {
+  // The page's own <img> request (Accept: image/...) gets a real SVG; capture's fetch (Accept: */*) gets garbage.
+  const SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="#1a833b"/></svg>';
+  const html =
+    "<!doctype html><html><head><style>body{margin:0}img{display:block}</style><script>" +
+    "window.__slidev__ = { nav: { total: 1, slides: [{ no: 1, meta: { slide: { sourceIndex: 0 } } }] }, configs: { canvasWidth: 980, aspectRatio: 16 / 9 } };" +
+    "</script></head><body>" + page(1, '<img src="/flaky.svg" style="width:80px;height:40px">') + "</body></html>";
   const server = createServer((req, res) => {
     const path = new URL(req.url, "http://localhost").pathname;
     if (path === "/1") return void res.writeHead(200, { "content-type": "text/html" }).end(html);
-    if (files[path]) return void res.writeHead(200, { "content-type": "image/svg+xml" }).end(files[path]);
+    if (path === "/flaky.svg") return void res.writeHead(200, { "content-type": "image/svg+xml" }).end(/image\//.test(req.headers.accept || "") ? SVG : "<svg\nnot closed");
     res.writeHead(404).end("not found");
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise((resolve) => server.close(resolve)));
-
   const { slides: [slide] } = await captureDeck({ baseUrl: `http://127.0.0.1:${server.address().port}`, chromium, timeout: 15000 });
-  assert.equal(slide.error, undefined);
-  const [logo, sized, bad] = slide.nodes;
-  const size = (png) => [png.readUInt32BE(16), png.readUInt32BE(20)];
-  assert.deepEqual([logo.kind, logo.format, logo.ext, logo.natural, logo.fit, logo.svg.toString()], ["image", "svg", "png", null, "fill", LOGO]);
-  assert.deepEqual(size(logo.data), [200, 100]);
-  assert.deepEqual([sized.kind, sized.svg.toString()], ["image", SIZED]);
-  assert.deepEqual(size(sized.data), [160, 80]);
-  assert.equal(bad.kind, "raster");
-  assert.match(bad.reason, /^image not fetched/);
-  assert.equal(bad.svg, undefined);
+  const [node] = slide.nodes;
+  assert.equal(node.kind, "raster");
+  assert.match(node.reason, /^image not fetched: /);
+  assert.ok(!node.reason.includes("\n"), node.reason);
+  assert.equal(node.svg, undefined);
 });

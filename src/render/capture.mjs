@@ -113,8 +113,10 @@ async function fetchBytes(page, src) {
   return Buffer.from(await res.body());
 }
 
-// An SVG drawn at the element's size (2x) into a transparent PNG, the fallback next to the SVG.
-async function svgPng(page, src, rect) {
+// The SVG file's own bytes drawn at the element's size (2x) into a transparent PNG, the fallback next
+// to the SVG. Drawn from a data URL, not the page's request: no second fetch, no cross-origin taint,
+// and the PNG always matches the SVG that is embedded.
+async function svgPng(page, svg, rect) {
   const dataUrl = await page.evaluate(
     async ({ url, w, h }) => {
       const img = new Image();
@@ -126,7 +128,7 @@ async function svgPng(page, src, rect) {
       c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
       return c.toDataURL("image/png");
     },
-    { url: src, w: rect.w, h: rect.h },
+    { url: `data:image/svg+xml;base64,${svg.toString("base64")}`, w: rect.w, h: rect.h },
   );
   return Buffer.from(dataUrl.slice(dataUrl.indexOf(",") + 1), "base64");
 }
@@ -140,10 +142,10 @@ async function loadImage(page, node) {
     node.data = await fetchBytes(page, node.src);
     if (node.format === "svg") {
       const svg = node.data;
-      node.data = await svgPng(page, node.src, node.rect);
+      node.data = await svgPng(page, svg, node.rect);
       node.svg = svg;
       node.ext = "png";
-      node.natural = null;
+      // The extractor only lets an SVG through when its box has the SVG's aspect, so it fills the box.
       node.fit = "fill";
       return;
     }
@@ -158,7 +160,7 @@ async function loadImage(page, node) {
       Object.assign(node, { kind: "missing", label: node.alt || node.src });
       return;
     }
-    Object.assign(node, { kind: "raster", reason: `image not fetched: ${err.message}`, label: node.alt || node.src, png: await elementShot(page, node.id) });
+    Object.assign(node, { kind: "raster", reason: `image not fetched: ${String(err.message || err).split("\n")[0]}`, label: node.alt || node.src, png: await elementShot(page, node.id) });
   }
 }
 

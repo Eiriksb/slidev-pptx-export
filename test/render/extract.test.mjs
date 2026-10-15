@@ -501,3 +501,38 @@ test("an SVG image is an image node, not a picture of an element", opts, async (
   const s = await extractHtml(browser, `<img src="${svg}" alt="Logo" style="display:block;width:80px;height:40px">`);
   assert.deepEqual(s.nodes.map((n) => [n.kind, n.format, n.alt]), [["image", "svg", "Logo"]]);
 });
+
+const svgUrl = (w, h) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}"><rect width="${w}" height="${h}" fill="#1a833b"/></svg>`)}`;
+
+test("an SVG image in a box of another aspect is a picture of the page's drawing", opts, async () => {
+  // A 2:1 SVG in a square box: the page letterboxes, crops or leaves it at natural size depending on object-fit.
+  for (const fit of ["fill", "contain", "cover"]) {
+    const s = await extractHtml(browser, `<img src="${svgUrl(40, 20)}" style="display:block;width:100px;height:100px;object-fit:${fit}">`);
+    assert.deepEqual(s.nodes.map((n) => [n.kind, n.reason]), [["raster", "SVG image fit"]], fit);
+  }
+});
+
+test("object-fit: none or scale-down on an SVG image is a picture even in a box of its own aspect", opts, async () => {
+  for (const fit of ["none", "scale-down"]) {
+    const s = await extractHtml(browser, `<img src="${svgUrl(40, 20)}" style="display:block;width:80px;height:40px;object-fit:${fit}">`);
+    assert.deepEqual(s.nodes.map((n) => [n.kind, n.reason]), [["raster", "SVG image fit"]], fit);
+  }
+});
+
+test("an SVG image in a box of its own aspect stays an image node for fill, contain and cover; padding counts out of the box", opts, async () => {
+  for (const fit of ["fill", "contain", "cover"]) {
+    const s = await extractHtml(browser, `<img src="${svgUrl(40, 20)}" style="display:block;box-sizing:border-box;width:84px;height:44px;padding:2px;object-fit:${fit}">`);
+    assert.deepEqual(s.nodes.map((n) => [n.kind, n.format, n.fit, n.rect.w, n.rect.h]), [["image", "svg", fit, 80, 40]], fit);
+  }
+});
+
+test("a rotated SVG image is judged by its own box, not the rotated hull", opts, async () => {
+  const s = await extractHtml(browser, `<img src="${svgUrl(40, 20)}" style="display:block;width:80px;height:40px;transform:rotate(30deg)">`);
+  assert.deepEqual(s.nodes.map((n) => [n.kind, n.format, n.rotate]), [["image", "svg", 30]]);
+});
+
+test("a broken SVG image is skipped as missing, like any other image that didn't load", opts, async () => {
+  const bad = "data:image/svg+xml;charset=utf-8,this%20is%20not%20an%20svg";
+  const s = await extractHtml(browser, `<img src="${bad}" alt="Logo" style="display:block;width:80px;height:40px">`);
+  assert.deepEqual(s.nodes.map((n) => [n.kind, n.src === bad]), [["missing", true]]);
+});

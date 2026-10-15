@@ -86,7 +86,7 @@ export function backgroundXml(bg, rId) {
   return `<p:bg><p:bgPr>${fill}<a:effectLst/></p:bgPr></p:bg>`;
 }
 
-// PowerPoint 2016+ draws the SVG; older PowerPoint, Google Slides, Keynote and LibreOffice use the PNG.
+// PowerPoint 2016+ and LibreOffice draw the SVG; older PowerPoint, Google Slides and Keynote use the PNG.
 const SVG_EXT = "{96DAC541-7B7A-43D3-8B79-37D633B846F1}";
 const ASVG = "http://schemas.microsoft.com/office/drawing/2016/SVG/main";
 

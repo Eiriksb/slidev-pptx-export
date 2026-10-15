@@ -104,7 +104,7 @@ test("images: content box, natural size, object-fit and border; a broken image i
 
 test("a translucent background image is a picture, like a translucent img", opts, async () => {
   const s = await extractHtml(browser,
-    `<div style="width:100px;height:60px;opacity:0.5;background-image:url(${PNG});background-size:cover"></div>`);
+    `<div style="width:100px;height:60px;opacity:0.5;background-image:url(${PNG});background-size:cover;background-position:center"></div>`);
   assert.deepEqual(s.nodes.map((n) => [n.kind, n.reason]), [["raster", "image opacity"]]);
 });
 
@@ -137,7 +137,7 @@ test("backgrounds: the layout root's color is the slide background; an image bac
 test("gradients: a radial glow over a color is a native background gradient; a linear gradient fills a box; layered backgrounds stay pictures", opts, async () => {
   const glow = await extractHtml(browser, "<p>x</p>", { layoutStyle: "background:radial-gradient(60% 50% at 50% 38%, rgba(26, 131, 59, 0.12) 0%, transparent 70%), #ffffff" });
   assert.deepEqual(glow.background, {
-    gradient: { type: "radial", cx: 0.5, cy: 0.38, rx: 588, stops: [{ pos: 0, color: { hex: "1A833B", alpha: 0.12 } }, { pos: 0.7, color: { hex: "000000", alpha: 0 } }] },
+    gradient: { type: "radial", cx: 0.5, cy: 0.38, rx: 588, ry: 276, stops: [{ pos: 0, color: { hex: "1A833B", alpha: 0.12 } }, { pos: 0.7, color: { hex: "000000", alpha: 0 } }] },
     base: { hex: "FFFFFF", alpha: 1 },
   });
   const lin = await extractHtml(browser, '<div style="width:100px;height:50px;background:linear-gradient(to right, #ff0000, #0000ff)"></div>');
@@ -165,6 +165,48 @@ test("gradient geometry: corners aim across the box, an `at` position alone work
     assert.equal(await fillOf(css), "gradient", css);
   }
   assert.equal(await fillOf("linear-gradient(red, blue)", "background-size:20px 20px"), "gradient");
+});
+
+test("radial gradients keep their shape: circle and ellipse get their own radii; a shape the box can't show, or a focus outside it, is a picture", opts, async () => {
+  const radial = async (css, size = "width:200px;height:150px") => {
+    const s = await extractHtml(browser, `<div style="${size};background:${css}"></div>`);
+    const n = s.nodes[0];
+    return n.kind === "box" ? n.fill.gradient : n.reason;
+  };
+  const radii = (g) => [g.rx, g.ry];
+  assert.deepEqual(radii(await radial("radial-gradient(#fff, #000)")), [141.42, 106.07]);
+  assert.deepEqual(radii(await radial("radial-gradient(circle, #fff, #000)")), [125, 125]);
+  assert.deepEqual(radii(await radial("radial-gradient(circle closest-side, #fff, #000)")), [75, 75]);
+  assert.deepEqual(radii(await radial("radial-gradient(ellipse closest-side, #fff, #000)", "width:400px;height:200px")), [200, 100]);
+  assert.deepEqual(radii(await radial("radial-gradient(ellipse farthest-side at 40% 50%, #fff, #000)", "width:400px;height:200px")), [240, 100]);
+  assert.deepEqual(radii(await radial("radial-gradient(ellipse closest-corner, #fff, #000)", "width:400px;height:200px")), [282.84, 141.42]);
+  assert.deepEqual(radii(await radial("radial-gradient(60px, #fff, #000)")), [60, 60]);
+  assert.deepEqual(radii(await radial("radial-gradient(120px 80px at 50% 50%, #fff, #000)")), [120, 80]);
+  // A circle on a wide box, an ellipse far from the box's aspect and a focus outside the box.
+  assert.equal(await radial("radial-gradient(circle, #fff, #000)", "width:400px;height:200px"), "radial gradient shape");
+  assert.equal(await radial("radial-gradient(circle, #fff, #000)", "width:320px;height:180px"), "radial gradient shape");
+  assert.equal(await radial("radial-gradient(100px 20px, #fff, #000)"), "radial gradient shape");
+  assert.equal(await radial("radial-gradient(circle at 150% 50%, #fff, #000)"), "radial gradient focus");
+  const slide = await extractHtml(browser, "<p>x</p>", { layoutStyle: "background:radial-gradient(circle, #fff, #000), #fff" });
+  assert.deepEqual(slide.background, { raster: true, reason: "radial gradient shape" });
+});
+
+test("url() backgrounds are native only when stretched or cropped around the center; sized, tiled or off-center ones are pictures", opts, async () => {
+  const bg = async (css, size = "width:200px;height:100px") => {
+    const s = await extractHtml(browser, `<div style="${size};background:${css}"></div>`);
+    const image = s.nodes.find((n) => n.kind === "image");
+    return image ? image.fit : s.nodes.find((n) => n.kind === "raster").reason;
+  };
+  // The longhands list one value per layer ("cover, auto"); only the image's own layer counts.
+  assert.equal(await bg(`url(${PNG}) center/cover no-repeat, #fff`), "cover");
+  assert.equal(await bg(`url(${PNG}) center/cover`), "cover");
+  assert.equal(await bg(`url(${PNG}) center/contain no-repeat`), "contain");
+  assert.equal(await bg(`url(${PNG}) 0 0/100% 100%`), "fill");
+  assert.equal(await bg(`url(${PNG}) center/contain`), "background image size");
+  assert.equal(await bg(`url(${PNG}) 0 0/20px 20px`), "background image size");
+  assert.equal(await bg(`url(${PNG})`), "background image size");
+  assert.equal(await bg(`url(${PNG}) 0 0/cover no-repeat`), "background image position");
+  assert.equal(await bg(`url(${PNG}) top/cover`), "background image position");
 });
 
 test("a custom layout without the slidev-layout class still extracts, on white", opts, async () => {

@@ -109,11 +109,59 @@ function sideBar(rect, side, u, style, opacity) {
   return bar;
 }
 
-// A CSS gradient (and the color under it) -> a DrawingML gradient. Stops are composited over an
-// opaque base color; transparent stops borrow their neighbour's hue (a fade to "transparent"
-// would otherwise pass through black); radial stop positions are rescaled from the CSS radius
-// to DrawingML's focus-to-farthest-corner radius; angles move from CSS (0 = up) to DrawingML
-// (0 = left to right).
+const channels = (c) => [0, 2, 4].map((i) => parseInt(c.hex.slice(i, i + 2), 16));
+const hexOf = (rgb) => rgb.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("").toUpperCase();
+
+// Source-over: color `top` painted over color `bottom` (each { hex, alpha }).
+function composite(top, bottom) {
+  const at = top.alpha ?? 1;
+  const ab = bottom.alpha ?? 1;
+  const a = ab >= 1 ? 1 : at + ab * (1 - at);
+  if (!(a > 0)) return { hex: top.hex, alpha: 0 };
+  const t = channels(top);
+  const b = channels(bottom);
+  return { hex: hexOf(t.map((v, i) => (v * at + b[i] * ab * (1 - at)) / a)), alpha: a };
+}
+
+// The color u of the way from c1 to c2, mixed the way CSS does (premultiplied by alpha).
+function mix(c1, c2, u) {
+  const a1 = c1.alpha ?? 1;
+  const a2 = c2.alpha ?? 1;
+  const a = a1 * (1 - u) + a2 * u;
+  if (!(a > 0)) return { hex: c1.hex, alpha: 0 };
+  const x = channels(c1);
+  const y = channels(c2);
+  return { hex: hexOf(x.map((v, i) => (v * a1 * (1 - u) + y[i] * a2 * u) / a)), alpha: a };
+}
+
+// Stops (positions ascending) cut to 0..1: the color at the cut is interpolated, the stops
+// beyond it dropped - CSS paints only that part of the gradient.
+function clipStops(stops) {
+  if (stops[0].pos < 0) {
+    let i = 0;
+    while (i + 1 < stops.length && stops[i + 1].pos <= 0) i++;
+    const next = stops[i + 1];
+    const color = next ? mix(stops[i].color, next.color, (0 - stops[i].pos) / (next.pos - stops[i].pos)) : stops[i].color;
+    stops = [{ pos: 0, color }, ...stops.slice(i + 1)];
+  }
+  if (stops[stops.length - 1].pos > 1) {
+    let j = stops.length - 1;
+    while (j > 0 && stops[j - 1].pos >= 1) j--;
+    const prev = stops[j - 1];
+    const color = prev ? mix(prev.color, stops[j].color, (1 - prev.pos) / (stops[j].pos - prev.pos)) : stops[j].color;
+    stops = [...stops.slice(0, j), { pos: 1, color }];
+  }
+  return stops;
+}
+
+// A CSS gradient (and the color under it) -> a DrawingML gradient. Stops are composited over the
+// base color (source-over, so a translucent base survives); transparent stops borrow their
+// neighbour's hue (a fade to "transparent" would otherwise pass through black). Radial stop
+// positions are rescaled from the CSS ellipse to DrawingML's focus-to-farthest-corner radius:
+// stops are scaled by sqrt(rx * ry), the radius of the circle with the ellipse's area, over that
+// distance - the extractor only passes ellipses within 0.7-1.4 of the box's aspect, so this keeps
+// the glow's size right whether the renderer draws DrawingML's circle round or stretched to the
+// box. Linear angles move from CSS (0 = up) to DrawingML (0 = left to right).
 function gradientOf(g, base, rect, style, opacity = 1) {
   let stops = g.stops.map((s) => ({ pos: s.pos, color: s.color }));
   stops = stops.map((s, i) => {
@@ -121,25 +169,19 @@ function gradientOf(g, base, rect, style, opacity = 1) {
     const near = stops.slice(i + 1).concat(stops.slice(0, i).reverse()).find((x) => x.color.alpha > 0);
     return near ? { pos: s.pos, color: { hex: near.color.hex, alpha: 0 } } : s;
   });
-  if (base && (base.alpha ?? 1) >= 1) {
-    const over = (c) => {
-      const a = c.alpha ?? 1;
-      const ch = (i) => Math.round(parseInt(c.hex.slice(i, i + 2), 16) * a + parseInt(base.hex.slice(i, i + 2), 16) * (1 - a));
-      return { hex: [0, 2, 4].map((i) => ch(i).toString(16).padStart(2, "0")).join("").toUpperCase(), alpha: 1 };
-    };
-    stops = stops.map((s) => ({ pos: s.pos, color: over(s.color) }));
-  }
+  if (base && (base.alpha ?? 1) > 0) stops = stops.map((s) => ({ pos: s.pos, color: composite(s.color, base) }));
   let out;
   if (g.type === "radial") {
     const cx = g.cx * rect.w;
     const cy = g.cy * rect.h;
     const far = Math.max(...[[0, 0], [rect.w, 0], [0, rect.h], [rect.w, rect.h]].map(([x, y]) => Math.hypot(x - cx, y - cy)));
-    const k = far > 0 ? g.rx / far : 1;
-    stops = stops.map((s) => ({ ...s, pos: Math.min(1, s.pos * k) }));
+    const k = far > 0 ? Math.sqrt(g.rx * (g.ry ?? g.rx)) / far : 1;
+    stops = stops.map((s) => ({ ...s, pos: s.pos * k }));
     out = { type: "radial", cx: g.cx, cy: g.cy };
   } else {
     out = { type: "linear", angle: (((g.angle - 90) % 360) + 360) % 360 };
   }
+  stops = clipStops(stops);
   // Past either end CSS keeps painting the end color; DrawingML wants stops at 0 and 1.
   const first = stops[0];
   if (first.pos > 0) stops.unshift({ pos: 0, color: first.color });

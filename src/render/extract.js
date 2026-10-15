@@ -92,14 +92,18 @@
     return { color: parseColor(m[1], true), pos: m[2] ?? null };
   }
 
+  const NOT_NATIVE = { unsupported: "gradient" };
+
   // One CSS gradient layer, measured against the element's box (rc) ->
-  // { type: "linear", angle } | { type: "radial", cx, cy, rx }, plus stops [{ pos, color }].
-  // Returns null for repeating or unparseable gradients.
+  //   { gradient: { type: "linear", angle } | { type: "radial", cx, cy, rx, ry }, + stops [{ pos, color }] }
+  // or { unsupported: reason } for repeating, unparseable or unfaithful gradients. A radial
+  // gradient is native only when its ellipse has about the box's aspect (DrawingML stretches the
+  // gradient to the box) and its center is inside the box.
   function parseGradient(layer, rc) {
     const m = /^(repeating-)?(linear|radial)-gradient\((.*)\)$/s.exec(layer.trim());
-    if (!m || m[1]) return null;
+    if (!m || m[1]) return NOT_NATIVE;
     const parts = splitTop(m[3]);
-    if (parts.length < 2) return null;
+    if (parts.length < 2) return NOT_NATIVE;
     const g = { type: m[2] };
     let length;
     if (g.type === "linear") {
@@ -107,7 +111,7 @@
       if (/^-?[\d.]+(deg|turn|grad|rad)$/.test(parts[0])) angle = toDeg(parts.shift());
       else if (/^to\s/.test(parts[0])) {
         angle = sideAngle(parts.shift().slice(3).trim(), rc);
-        if (angle == null) return null;
+        if (angle == null) return NOT_NATIVE;
       }
       g.angle = r2(((angle % 360) + 360) % 360);
       const rad = (g.angle * Math.PI) / 180;
@@ -116,7 +120,7 @@
       const shape = parseColorStop(parts[0]) ? "" : parts.shift();
       const [sizePart, atPart] = shape.split(/(?:^|\s+)at\s+/);
       const at = (atPart || "center").trim().split(/\s+/);
-      if (at.length > 2) return null;
+      if (at.length > 2) return NOT_NATIVE;
       let [px, py] = at;
       if (px === "top" || px === "bottom") [px, py] = [py || "center", px];
       const frac = (v, size) => {
@@ -125,32 +129,57 @@
         if (v === "right" || v === "bottom") return 1;
         return v.endsWith("%") ? parseFloat(v) / 100 : parseFloat(v) / size;
       };
-      g.cx = r2(frac(px, rc.w));
-      g.cy = r2(frac(py, rc.h));
-      const cx = g.cx * rc.w;
-      const cy = g.cy * rc.h;
-      const toSides = [cx, rc.w - cx, cy, rc.h - cy];
-      const toCorners = [[0, 0], [rc.w, 0], [0, rc.h], [rc.w, rc.h]].map(([x, y]) => Math.hypot(x - cx, y - cy));
-      const tokens = (sizePart || "").trim().split(/\s+/).filter((t) => t && t !== "circle" && t !== "ellipse");
-      if (tokens.some((t) => !/^(?:(?:closest|farthest)-(?:side|corner)|[\d.]+(?:px|%))$/.test(t))) return null;
-      const size = tokens[0];
+      const fx = frac(px, rc.w);
+      const fy = frac(py, rc.h);
+      if (Number.isNaN(fx) || Number.isNaN(fy)) return NOT_NATIVE;
+      if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return { unsupported: "radial gradient focus" };
+      const cx = fx * rc.w;
+      const cy = fy * rc.h;
+      const [dl, dr, dt, db] = [cx, rc.w - cx, cy, rc.h - cy];
+      const tokens = (sizePart || "").trim().split(/\s+/).filter(Boolean);
+      const keywords = tokens.filter((t) => t === "circle" || t === "ellipse");
+      const sizes = tokens.filter((t) => t !== "circle" && t !== "ellipse");
+      const lengths = sizes.filter((t) => /^[\d.]+(?:px|%)$/.test(t));
+      const extents = sizes.filter((t) => /^(?:closest|farthest)-(?:side|corner)$/.test(t));
+      if (keywords.length > 1 || lengths.length + extents.length !== sizes.length || extents.length > 1 || (extents.length && lengths.length)) return NOT_NATIVE;
+      // Without a keyword, a single length makes a circle; anything else an ellipse.
+      const circle = keywords.length ? keywords[0] === "circle" : lengths.length === 1;
+      if (lengths.length && (circle ? lengths.length !== 1 || lengths[0].endsWith("%") : lengths.length !== 2)) return NOT_NATIVE;
       let rx;
-      if (!size || size === "farthest-corner") rx = Math.max(...toCorners);
-      else if (size === "closest-side") rx = Math.min(...toSides);
-      else if (size === "farthest-side") rx = Math.max(...toSides);
-      else if (size === "closest-corner") rx = Math.min(...toCorners);
-      else rx = size.endsWith("%") ? (parseFloat(size) / 100) * rc.w : parseFloat(size);
+      let ry;
+      if (lengths.length) {
+        const len = (t, full) => (t.endsWith("%") ? (parseFloat(t) / 100) * full : parseFloat(t));
+        rx = len(lengths[0], rc.w);
+        ry = circle ? rx : len(lengths[1], rc.h);
+      } else {
+        const extent = extents[0] || "farthest-corner";
+        const pick = extent.startsWith("closest") ? Math.min : Math.max;
+        if (circle) {
+          rx = ry = extent.endsWith("side") ? pick(dl, dr, dt, db) : pick(Math.hypot(dl, dt), Math.hypot(dr, dt), Math.hypot(dl, db), Math.hypot(dr, db));
+        } else {
+          // An ellipse keeps the aspect of its side distances; reaching a corner scales both by sqrt(2).
+          const k = extent.endsWith("corner") ? Math.SQRT2 : 1;
+          rx = pick(dl, dr) * k;
+          ry = pick(dt, db) * k;
+        }
+      }
+      if (!(rx > 0 && ry > 0)) return NOT_NATIVE;
+      const aspect = rx / ry / (rc.w / rc.h);
+      if (aspect < 0.7 || aspect > 1.4) return { unsupported: "radial gradient shape" };
+      g.cx = r2(fx);
+      g.cy = r2(fy);
       g.rx = r2(rx);
+      g.ry = r2(ry);
       length = rx;
     }
-    if (!(length > 0) || (g.type === "radial" && !(g.rx > 0))) return null;
+    if (!(length > 0)) return NOT_NATIVE;
     const stops = [];
     for (const p of parts) {
       const s = parseColorStop(p);
-      if (!s) return null;
+      if (!s) return NOT_NATIVE;
       stops.push({ color: s.color, pos: s.pos == null ? null : s.pos.endsWith("%") ? parseFloat(s.pos) / 100 : parseFloat(s.pos) / length });
     }
-    if (stops.length < 2) return null;
+    if (stops.length < 2) return NOT_NATIVE;
     // Missing end positions are 0 and 1; a position behind an earlier one is pulled up to it;
     // the rest are spread evenly between their positioned neighbours.
     if (stops[0].pos == null) stops[0].pos = 0;
@@ -170,7 +199,7 @@
       for (let k = i; k < j; k++) stops[k].pos = a + ((b - a) * (k - i + 1)) / (j - i + 1);
     }
     g.stops = stops.map((s) => ({ pos: Math.round(s.pos * 10000) / 10000, color: s.color }));
-    return g;
+    return { gradient: g };
   }
 
   function formatOf(src) {
@@ -355,22 +384,33 @@
       const bg = cs.backgroundImage;
       if (!bg || bg === "none") return null;
       // A `background` shorthand ending in a color reports an extra "none" image layer.
-      const layers = splitTop(bg).filter((l) => l !== "none");
+      const all = splitTop(bg);
+      const layers = all.filter((l) => l !== "none");
       if (layers.length > 1) return { unsupported: "background layers" };
       if (!layers.length) return null;
+      // The longhands list one value per layer ("cover, auto"); this layer's is the one we want.
+      const index = all.findIndex((l) => l !== "none");
+      const layerValue = (v) => {
+        const list = splitTop(v);
+        return list.length ? list[index % list.length] : "";
+      };
+      const size = layerValue(cs.backgroundSize);
       if (/gradient\(/.test(layers[0])) {
         // A gradient sized or tiled by background-size is a pattern, not a fill.
-        const fills = splitTop(cs.backgroundSize).every((z) => /^(auto|auto auto|100% 100%|cover|contain)$/.test(z));
-        const gradient = fills ? parseGradient(layers[0], rc) : null;
-        return gradient ? { gradient } : { unsupported: "gradient" };
+        return /^(auto|auto auto|100% 100%|cover|contain)$/.test(size) ? parseGradient(layers[0], rc) : NOT_NATIVE;
       }
       const m = /^url\("?(.*?)"?\)$/.exec(layers[0]);
       if (!m) return { unsupported: "background image" };
       const src = new URL(m[1], location.href).href;
       const format = formatOf(src);
       if (!format || format === "svg") return { unsupported: "background image" };
-      const size = cs.backgroundSize;
-      return { src, format, fit: size === "cover" ? "cover" : size === "contain" ? "contain" : "fill" };
+      // The picture is stretched, or cropped / letterboxed around its center, to fill the box;
+      // anything that depends on the image's own size, tiling or an off-center position is a picture.
+      const noRepeat = /^no-repeat( no-repeat)?$/.test(layerValue(cs.backgroundRepeat));
+      const fit = size === "cover" ? "cover" : size === "contain" && noRepeat ? "contain" : size === "100% 100%" ? "fill" : null;
+      if (!fit) return { unsupported: "background image size" };
+      if (fit !== "fill" && layerValue(cs.backgroundPosition) !== "50% 50%") return { unsupported: "background image position" };
+      return { src, format, fit };
     }
 
     function rasterReason(el, cs, tag, op, rc) {
@@ -1076,7 +1116,8 @@
         if (cs.backgroundImage && cs.backgroundImage !== "none") {
           const bg = backgroundImageOf(cs, rectOf(e.getBoundingClientRect()));
           if (bg && bg.gradient) return { gradient: bg.gradient, base: parseColor(cs.backgroundColor) };
-          return { raster: true, reason: bg && bg.unsupported === "gradient" ? "gradient background" : "background image" };
+          const why = bg && bg.unsupported;
+          return { raster: true, reason: why === "gradient" ? "gradient background" : /gradient/.test(why || "") ? why : "background image" };
         }
         const c = parseColor(cs.backgroundColor);
         if (c) return { color: c };

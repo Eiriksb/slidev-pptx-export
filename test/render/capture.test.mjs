@@ -20,7 +20,7 @@ const HTML =
   "</script></head><body>" +
   page(1, '<p style="margin:0;font:20px Arial">Hello there</p><img src="/hang.png" style="width:100px;height:50px">') +
   page(2, "<div>An error occurred on this slide. Check the terminal for more information.</div>") +
-  page(3, '<div style="width:200px;height:100px;background-image:url(/404.png);background-size:cover">Inside</div>') +
+  page(3, '<div style="width:200px;height:100px;background-image:url(/404.png);background-size:cover;background-position:center">Inside</div>') +
   "</body></html>";
 
 test("a hanging image doesn't stall the export, a slide error is a failed slide, an unfetchable background is skipped", opts, async (t) => {

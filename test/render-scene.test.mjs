@@ -243,7 +243,7 @@ test("a horizontal chart lists its categories top-down; a translucent series kee
 
 test("gradients: radial backgrounds composite over their base and rescale to the corner radius; linear angles turn into DrawingML's", () => {
   const bg = {
-    gradient: { type: "radial", cx: 0.5, cy: 0.5, rx: 100, stops: [{ pos: 0, color: C("1A833B", 0.5) }, { pos: 0.5, color: { hex: "000000", alpha: 0 } }] },
+    gradient: { type: "radial", cx: 0.5, cy: 0.5, rx: 100, ry: 100, stops: [{ pos: 0, color: C("1A833B", 0.5) }, { pos: 0.5, color: { hex: "000000", alpha: 0 } }] },
     base: C("FFFFFF"),
   };
   const spec = sceneToSpec(scene([], { canvas: { w: 200, h: 200 }, background: bg }), STYLE);
@@ -271,4 +271,44 @@ test("gradient stops follow the box's opacity and run the full 0..1 range", () =
   });
   const opaque = sceneToSpec(scene([{ ...node, fill: { ...node.fill, base: C("FFFFFF") } }]), STYLE).shapes[0].fill;
   assert.deepEqual(opaque.stops.map((x) => [x.color, x.alpha]), [["#FF0000", 0.5], ["#FF0000", 0.5], ["lt1", 0.5], ["lt1", 0.5]]);
+});
+
+const gradBox = (fill, extra = {}) => ({
+  kind: "box", rect: { x: 0, y: 0, w: 200, h: 100 }, border: null, sides: null, radius: 0, shadow: null, opacity: 1, fill, ...extra,
+});
+
+test("a translucent base composites under every stop (source-over), then the box's opacity scales the result", () => {
+  const gradient = { type: "linear", angle: 90, stops: [{ pos: 0, color: C("FF0000") }, { pos: 0.5, color: C("0000FF", 0.5) }, { pos: 1, color: C("0000FF", 0) }] };
+  // a = as + ab(1 - as); c = (cs*as + cb*ab*(1 - as)) / a. Stop 2: a = 0.5 + 0.25 = 0.75, c = (0*0.5 + 255*0.25) / 0.75 = 85.
+  const [shape] = sceneToSpec(scene([gradBox({ gradient, base: C("FFFFFF", 0.5) })]), STYLE).shapes;
+  assert.deepEqual(shape.fill.stops, [
+    { pos: 0, color: "#FF0000" },
+    { pos: 0.5, color: "#5555FF", alpha: 0.75 },
+    { pos: 1, color: "lt1", alpha: 0.5 },
+  ]);
+  const [faded] = sceneToSpec(scene([gradBox({ gradient, base: C("FFFFFF", 0.5) }, { opacity: 0.5 })]), STYLE).shapes;
+  assert.deepEqual(faded.fill.stops.map((x) => x.alpha), [0.5, 0.375, 0.25]);
+});
+
+test("stops outside 0..1 are cut there, with the color at the cut interpolated", () => {
+  const fillOf = (stops) => sceneToSpec(scene([gradBox({ gradient: { type: "linear", angle: 90, stops }, base: null })]), STYLE).shapes[0].fill.stops;
+  // red -> blue over 0..150%: at 100% the gradient is two thirds of the way there.
+  assert.deepEqual(fillOf([{ pos: 0, color: C("FF0000") }, { pos: 1.5, color: C("0000FF") }]), [{ pos: 0, color: "#FF0000" }, { pos: 1, color: "#5500AA" }]);
+  // red at -25%: at 0% it is a fifth of the way to blue.
+  assert.deepEqual(fillOf([{ pos: -0.25, color: C("FF0000") }, { pos: 1, color: C("0000FF") }]), [{ pos: 0, color: "#CC0033" }, { pos: 1, color: "#0000FF" }]);
+  // A middle stop stays; only the stop past 1 is replaced by the color at 1.
+  assert.deepEqual(fillOf([{ pos: 0, color: C("FF0000") }, { pos: 0.5, color: C("00FF00") }, { pos: 2, color: C("0000FF") }]), [{ pos: 0, color: "#FF0000" }, { pos: 0.5, color: "#00FF00" }, { pos: 1, color: "#00AA55" }]);
+  // Every stop beyond the box: the end color fills it.
+  assert.deepEqual(fillOf([{ pos: 1.2, color: C("FF0000") }, { pos: 2, color: C("0000FF") }]), [{ pos: 0, color: "#FF0000" }, { pos: 1, color: "#FF0000" }]);
+});
+
+test("radial stops scale by the ellipse's equal-area radius over the focus-to-corner distance", () => {
+  const gradient = { type: "radial", cx: 0.5, cy: 0.5, rx: 141.42, ry: 70.71, stops: [{ pos: 0, color: C("000000") }, { pos: 1, color: C("FFFFFF") }] };
+  const [shape] = sceneToSpec(scene([gradBox({ gradient, base: null })]), STYLE).shapes;
+  const k = Math.round((Math.sqrt(141.42 * 70.71) / Math.hypot(100, 50)) * 10000) / 10000;
+  assert.deepEqual(shape.fill.stops.map((x) => x.pos), [0, k, 1]);
+  // A circle's equal-area radius is its radius.
+  const circle = { ...gradient, rx: 100, ry: 100 };
+  const [round] = sceneToSpec(scene([gradBox({ gradient: circle, base: null })]), STYLE).shapes;
+  assert.deepEqual(round.fill.stops.map((x) => x.pos), [0, Math.round((100 / Math.hypot(100, 50)) * 10000) / 10000, 1]);
 });

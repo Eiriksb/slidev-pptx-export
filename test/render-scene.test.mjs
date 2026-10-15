@@ -139,3 +139,63 @@ test("a title drawn first has no titleZ", () => {
   const spec = sceneToSpec(scene([text([run("Title", { size: 36 })], { role: "title" }), card]), STYLE);
   assert.equal("titleZ" in spec.placeholders, false);
 });
+
+test("table nodes become plain native tables with per-cell formatting and merges", () => {
+  const cell = (t, extra = {}) => ({ runs: [run(t, { size: 14 })], align: "left", valign: "top", lineHeight: 20, fill: null, borders: {}, padding: { t: 4, r: 8, b: 4, l: 8 }, colspan: 1, rowspan: 1, ...extra });
+  const node = {
+    kind: "table", rect: { x: 40, y: 40, w: 300, h: 60 }, colW: [100, 200], rowH: [30, 30], opacity: 1,
+    rows: [
+      [cell("Head", { fill: C("EEF4F0"), borders: { b: { width: 2, color: C("1A833B") } }, colspan: 2, align: "center", valign: "middle" }), { covered: "h" }],
+      [cell("a"), cell("b", { align: "right" })],
+    ],
+  };
+  const [t] = sceneToSpec(scene([node]), STYLE).shapes;
+  assert.deepEqual({ kind: t.kind, variant: t.variant, colW: t.colW, rowH: t.rowH }, { kind: "table", variant: "plain", colW: [inch(100), inch(200)], rowH: [inch(30), inch(30)] });
+  assert.deepEqual(t.rows[0][0], {
+    paras: [{ align: "ctr", lineSpacing: pt(20), runs: [{ text: "Head", size: pt(14), font: "body", color: "dk1" }] }],
+    margin: { l: inch(8), r: inch(8), t: inch(4), b: inch(4) }, anchor: "ctr",
+    borders: { b: { width: pt(2), color: "accent1" } }, fill: "lt2", gridSpan: 2,
+  });
+  assert.deepEqual(t.rows[0][1], { paras: [], hMerge: true, vMerge: false });
+  assert.equal(t.rows[1][1].paras[0].align, "r");
+});
+
+test("code nodes become an unwrapped text box with one paragraph per line", () => {
+  const node = {
+    kind: "code", rect: { x: 50, y: 50, w: 400, h: 54 }, lineHeight: 18, opacity: 1,
+    lines: [[run("const", { font: "JetBrains Mono", size: 13, color: C("1A589F") })], [], [run("  x", { font: "JetBrains Mono", size: 13 })]],
+  };
+  const [shape] = sceneToSpec(scene([node]), STYLE).shapes;
+  assert.equal(shape.wrap, false);
+  assert.deepEqual(shape.paras.map((p) => p.runs.map((r) => [r.text, r.font, r.color])), [[["const", "mono", "accent2"]], [], [["  x", "mono", "dk1"]]]);
+  assert.ok(shape.paras.every((p) => p.lineSpacing === pt(18)));
+});
+
+test("table and code nodes write a lint-clean package", async () => {
+  const cell = (t) => ({ runs: [run(t)], align: "left", valign: "top", lineHeight: 20, fill: C("EEF4F0"), borders: { b: { width: 1, color: C("D9E3DB") } }, padding: { t: 4, r: 8, b: 4, l: 8 }, colspan: 1, rowspan: 1 });
+  const spec = sceneToSpec(scene([
+    { kind: "table", rect: { x: 40, y: 40, w: 300, h: 60 }, colW: [150, 150], rowH: [30, 30], opacity: 1, rows: [[{ ...cell("A"), colspan: 2 }, { covered: "h" }], [cell("b"), cell("c")]] },
+    { kind: "code", rect: { x: 40, y: 200, w: 400, h: 36 }, lineHeight: 18, opacity: 1, lines: [[run("x = 1", { font: "JetBrains Mono" })], []] },
+  ]), STYLE);
+  assert.deepEqual(await lintPackage(await writePptx([spec], { ...DECK, logo: null })), []);
+});
+
+test("table cells carry row spans, bottom anchors and the node's opacity on fills and borders", () => {
+  const cell = (t, extra = {}) => ({ runs: [run(t, { size: 14 })], align: "left", valign: "bottom", lineHeight: 0, fill: null, borders: {}, padding: { t: 0, r: 0, b: 0, l: 0 }, colspan: 1, rowspan: 1, ...extra });
+  const node = {
+    kind: "table", rect: { x: 40, y: 40, w: 200, h: 60 }, colW: [100, 100], rowH: [30, 30], opacity: 0.5,
+    rows: [
+      [cell("a", { rowspan: 2, fill: C("EEF4F0", 0.8), borders: { l: { width: 1, color: C("D9E3DB", 0.4) } } }), cell("b", { valign: "middle" })],
+      [{ covered: "v" }, cell("c")],
+    ],
+  };
+  const [t] = sceneToSpec(scene([node]), STYLE).shapes;
+  const [a, b] = t.rows[0];
+  assert.deepEqual({ rowSpan: a.rowSpan, anchor: a.anchor, fill: a.fill, fillAlpha: a.fillAlpha, l: a.borders.l, para: a.paras[0].lineSpacing }, {
+    rowSpan: 2, anchor: "b", fill: "lt2", fillAlpha: 0.4, l: { width: pt(1), color: "accent4", alpha: 0.2 }, para: undefined,
+  });
+  assert.equal(b.anchor, "ctr");
+  assert.equal(b.paras[0].runs[0].color, "dk1");
+  assert.equal(b.paras[0].runs[0].alpha, 0.5);
+  assert.deepEqual(t.rows[1][0], { paras: [], hMerge: false, vMerge: true });
+});

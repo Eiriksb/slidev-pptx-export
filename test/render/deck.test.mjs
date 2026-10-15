@@ -61,3 +61,13 @@ test("exports the innotek deck with --render: lint-clean, title placeholders, na
   assert.match(cards, /<a:solidFill><a:schemeClr val="accent1"\/><\/a:solidFill><a:latin typeface="\+mj-lt"\/><a:ea typeface="\+mj-ea"\/><a:cs typeface="\+mj-cs"\/><\/a:rPr><a:t>OVERVIEW<\/a:t>/);
   assert.match(z.text("ppt/slides/slide1.xml"), /<p:bg><p:bgPr><a:blipFill/);
 });
+
+test("the innotek table and code block are native", deckOpts, async () => {
+  const { z } = await exportInnotek("innotek-content.pptx");
+  const slide = z.text("ppt/slides/slide5.xml");
+  assert.match(slide, /<a:tableStyleId>\{2D5ABB26-0587-4C30-8999-92F81FD0307C\}<\/a:tableStyleId>/);
+  assert.match(slide, /<a:t>Option<\/a:t>/);
+  // Syntax highlighting splits the code into one run per token.
+  const text = [...slide.matchAll(/<a:t>([^<]*)<\/a:t>/g)].map((m) => m[1]).join("");
+  assert.match(text, /const answer = await agent\.ask\(/);
+});

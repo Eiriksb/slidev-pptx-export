@@ -161,12 +161,63 @@ function imageShape(node, u, style) {
   return shape;
 }
 
+const VALIGN = { middle: "ctr", bottom: "b" };
+
+// A table: one native table with no style, every cell carrying its own fill, borders, margins and
+// anchor. A span's start cell carries gridSpan/rowSpan; the slots it covers are merge markers.
+function tableShape(node, u, style) {
+  const op = node.opacity ?? 1;
+  const cellOf = (c) => {
+    if (c.covered) return { paras: [], hMerge: c.covered.includes("h"), vMerge: c.covered.includes("v") };
+    const para = { runs: c.runs.map((r) => runOf(r, u, style, op)) };
+    const align = ALIGN[c.align];
+    if (align && align !== "l") para.align = align;
+    if (c.lineHeight) para.lineSpacing = u.pt(c.lineHeight);
+    const out = {
+      paras: [para],
+      margin: { l: u.inch(c.padding.l), r: u.inch(c.padding.r), t: u.inch(c.padding.t), b: u.inch(c.padding.b) },
+      anchor: VALIGN[c.valign] || "t",
+      borders: {},
+    };
+    for (const [side, b] of Object.entries(c.borders || {})) {
+      out.borders[side] = { width: u.pt(b.width), color: colorOf(b.color, style) };
+      const a = alphaOf(b.color, op);
+      if (a !== undefined) out.borders[side].alpha = a;
+    }
+    if (c.fill) {
+      out.fill = colorOf(c.fill, style);
+      const a = alphaOf(c.fill, op);
+      if (a !== undefined) out.fillAlpha = a;
+    }
+    if (c.colspan > 1) out.gridSpan = c.colspan;
+    if (c.rowspan > 1) out.rowSpan = c.rowspan;
+    return out;
+  };
+  return {
+    kind: "table", ...u.box(node.rect), variant: "plain",
+    colW: node.colW.map((w) => u.inch(w)), rowH: node.rowH.map((h) => u.inch(h)),
+    rows: node.rows.map((row) => row.map(cellOf)),
+  };
+}
+
+// A code block's text: one paragraph per source line at the measured line height, never wrapped,
+// over the panel box the `pre` itself produced.
+function codeShape(node, u, style) {
+  const op = node.opacity ?? 1;
+  const paras = node.lines.map((runs) => ({ lineSpacing: u.pt(node.lineHeight), runs: runs.map((r) => runOf(r, u, style, op)) }));
+  return { kind: "text", ...u.box(node.rect), geometry: "rect", anchor: "t", inset: 0, wrap: false, paras };
+}
+
 export function shapesOf(node, u, style) {
   switch (node.kind) {
     case "text":
       return [textShape(node, u, style)];
     case "list":
       return [listShape(node, u, style)];
+    case "table":
+      return [tableShape(node, u, style)];
+    case "code":
+      return [codeShape(node, u, style)];
     case "box":
       return boxShapes(node, u, style);
     case "image":

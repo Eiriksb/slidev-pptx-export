@@ -139,3 +139,71 @@ test("a custom layout without the slidev-layout class still extracts, on white",
   assert.deepEqual(s.background, { color: { hex: "FFFFFF", alpha: 1 } });
   assert.deepEqual(s.nodes.map((n) => [n.kind, n.role]), [["text", "title"]]);
 });
+
+test("tables become table nodes: a grid with spans, measured columns and rows, per-cell fill, borders, padding and alignment", opts, async () => {
+  const s = await extractHtml(browser,
+    '<table style="border-collapse:collapse;font:14px/20px Arial">' +
+      '<tr><th style="background:#eef4f0;border-bottom:2px solid #1a833b;padding:4px 8px;text-align:left">Option</th><th style="padding:4px 8px" colspan="2">Pros and cons</th></tr>' +
+      '<tr><td style="padding:4px 8px;vertical-align:middle" rowspan="2">A</td><td style="padding:4px 8px">Simple</td><td style="padding:4px 8px">Slower</td></tr>' +
+      '<tr><td style="padding:4px 8px">Fast</td><td style="padding:4px 8px;text-align:right">More <b>setup</b></td></tr></table>');
+  const t = s.nodes.find((n) => n.kind === "table");
+  assert.ok(t, JSON.stringify(s.nodes.map((n) => n.kind)));
+  assert.equal(s.nodes.filter((n) => n.kind === "text").length, 0, "cell text lives only in the table node");
+  assert.deepEqual([t.colW.length, t.rowH.length], [3, 3]);
+  assert.ok(Math.abs(t.colW.reduce((a, b) => a + b, 0) - t.rect.w) < 1);
+  const [head, span, covered] = t.rows[0];
+  assert.deepEqual([textOf(head), head.fill, head.borders.b, head.padding, head.align], [
+    "Option", { hex: "EEF4F0", alpha: 1 }, { width: 2, color: { hex: "1A833B", alpha: 1 } }, { t: 4, r: 8, b: 4, l: 8 }, "left",
+  ]);
+  assert.deepEqual([span.colspan, span.align], [2, "center"]);
+  assert.deepEqual(covered, { covered: "h" });
+  assert.deepEqual([t.rows[1][0].rowspan, t.rows[1][0].valign, t.rows[2][0]], [2, "middle", { covered: "v" }]);
+  assert.deepEqual([textOf(t.rows[2][2]), t.rows[2][2].align, t.rows[2][2].runs[1].bold], ["More setup", "right", true]);
+});
+
+test("code blocks become a panel box plus one line of runs per source line, keeping token colors and leading spaces", opts, async () => {
+  const s = await extractHtml(browser,
+    '<pre style="margin:0;background:#eef4f0;padding:10px;font:13px/18px monospace"><code><span style="color:#1a589f">const</span> x = 1;\n<span style="color:#1a833b">  return</span> x;\n</code></pre>');
+  const [panel, code] = s.nodes;
+  assert.deepEqual([panel.kind, panel.fill.hex], ["box", "EEF4F0"]);
+  assert.equal(code.kind, "code");
+  assert.equal(code.lineHeight, 18);
+  assert.deepEqual({ x: code.rect.x, y: code.rect.y }, { x: 50, y: 50 });
+  assert.deepEqual(code.lines.map((l) => l.map((r) => [r.text, r.color.hex])), [
+    [["const", "1A589F"], [" x = 1;", "000000"]],
+    [["  return", "1A833B"], [" x;", "000000"]],
+  ]);
+});
+
+test("collapsed-border tables: a row's rules land on its cells, the wider rule wins, and a row group's background fills its cells", opts, async () => {
+  const s = await extractHtml(browser,
+    '<table style="border-collapse:collapse;font:14px/20px Arial"><thead style="background:#eef4f0"><tr style="border-bottom:2px solid #1a833b"><th>H1</th><th>H2</th></tr></thead>' +
+      '<tbody><tr style="border-bottom:1px solid #999"><td rowspan="2">A</td><td style="border-bottom:3px solid #1a589f">B</td></tr><tr style="border-bottom:1px solid #999"><td>C</td></tr></tbody></table>');
+  const t = s.nodes.find((n) => n.kind === "table");
+  const green = { width: 2, color: { hex: "1A833B", alpha: 1 } };
+  assert.deepEqual([t.rows[0][0].borders, t.rows[0][1].borders], [{ b: green }, { b: green }]);
+  assert.deepEqual([t.rows[0][0].fill, t.rows[0][1].fill], [{ hex: "EEF4F0", alpha: 1 }, { hex: "EEF4F0", alpha: 1 }]);
+  assert.equal(t.rows[1][0].fill, null);
+  assert.deepEqual(t.rows[1][1].borders.b, { width: 3, color: { hex: "1A589F", alpha: 1 } }, "the cell's own wider rule beats its row's");
+  assert.deepEqual(t.rows[1][0].borders.b, { width: 1, color: { hex: "999999", alpha: 1 } }, "a row-spanning cell takes the rule of the last row it spans");
+});
+
+test("table cells: hidden paragraphs add no text; a list inside a cell and a caption become nodes of their own on top of the table", opts, async () => {
+  const s = await extractHtml(browser,
+    '<table style="font:14px/20px Arial"><caption>Caption text</caption><tr><td><p style="display:none">HIDDEN</p><p>First</p><p>Second</p></td><td><ul style="margin:0"><li>Nested item</li></ul></td></tr></table>');
+  const kinds = s.nodes.map((n) => n.kind);
+  assert.equal(kinds[0], "table");
+  const t = s.nodes[0];
+  assert.deepEqual([t.rows[0][0].runs.map((r) => r.text), t.rows[0][1].runs], [["First\nSecond"], []], "paragraphs join with a break, like list items");
+  assert.ok(kinds.includes("list"), kinds.join());
+  assert.ok(s.nodes.some((n) => n.kind === "text" && textOf(n) === "Caption text"), "the caption is drawn as text");
+  assert.ok(!JSON.stringify(s.nodes).includes("HIDDEN"));
+});
+
+test("code blocks: the token spans' own decorations count, hidden spans are skipped, and a blank line in the middle stays a line", opts, async () => {
+  const s = await extractHtml(browser,
+    '<pre style="margin:0;font:13px/18px monospace;text-decoration:underline"><code>a\n\n<span style="opacity:0">GONE</span>b\n</code></pre>');
+  const code = s.nodes.find((n) => n.kind === "code");
+  assert.deepEqual(code.lines.map((l) => l.map((r) => r.text)), [["a"], [], ["b"]]);
+  assert.equal(code.lines[0][0].underline, true);
+});

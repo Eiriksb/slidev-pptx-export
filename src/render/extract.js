@@ -7,10 +7,10 @@
 // capture.mjs can screenshot exactly that element.
 (() => {
   const SKIP_TAGS = new Set(["script", "style", "noscript", "template", "link", "meta", "head", "title"]);
-  // Drawn as pictures; later tasks turn tables, code blocks and charts native.
+  // Drawn as pictures; Task 9 turns Chart.js canvases into native charts.
   const RASTER_TAGS = {
     canvas: "canvas", svg: "inline SVG", iframe: "iframe", video: "video", audio: "audio",
-    object: "embedded object", embed: "embedded object", math: "math", table: "table", pre: "code block",
+    object: "embedded object", embed: "embedded object", math: "math",
   };
   const REPLACED = new Set(["img", "svg", "canvas", "video", "iframe", "object", "embed", "math", "audio"]);
   const IMAGE_FORMATS = { png: "png", jpg: "jpg", jpeg: "jpg", gif: "gif", svg: "svg", "svg+xml": "svg" };
@@ -498,6 +498,150 @@
       if (items.length && onCanvas(box)) nodes.push({ kind: "list", rect: box, items: items.map(({ lastTop, ...it }) => it), opacity: op });
     }
 
+    // True when the element, or an ancestor below `root`, is not drawn: display none, hidden or
+    // fully transparent.
+    function hiddenWithin(el, root) {
+      for (let e = el; e && e !== root; e = e.parentElement) {
+        const s = getComputedStyle(e);
+        if (s.display === "none" || s.visibility === "hidden" || parseFloat(s.opacity) === 0) return true;
+      }
+      return false;
+    }
+
+    function cellBorders(cs) {
+      const out = {};
+      for (const [side, name] of [["t", "Top"], ["r", "Right"], ["b", "Bottom"], ["l", "Left"]]) {
+        const width = parseFloat(cs[`border${name}Width`]) || 0;
+        const style = cs[`border${name}Style`];
+        const color = width && style !== "none" && style !== "hidden" ? parseColor(cs[`border${name}Color`]) : null;
+        if (color) out[side] = { width, color };
+      }
+      return out;
+    }
+
+    // A cell's inline content (its <p> children included) as runs; other blocks are returned
+    // to be walked as nodes of their own, on top of the table.
+    function cellContent(cell) {
+      const segment = [];
+      const blocks = [];
+      for (const c of cell.childNodes) {
+        if (c.nodeType === Node.TEXT_NODE) segment.push(c);
+        else if (c.nodeType !== Node.ELEMENT_NODE) continue;
+        else if (isInlineFlow(c)) segment.push(c);
+        else if (c.localName === "p") {
+          const pcs = getComputedStyle(c);
+          if (pcs.display === "none" || pcs.visibility === "hidden" || parseFloat(pcs.opacity) === 0) continue;
+          if (segment.length) segment.push(BREAK);
+          segment.push(...c.childNodes);
+        } else blocks.push(c);
+      }
+      const raw = [];
+      const deferred = [];
+      collectRuns(segment, inheritedDeco(cell), null, raw, deferred);
+      const runs = tidyRuns(raw, getComputedStyle(cell));
+      return { runs, m: runs.length ? measure(segment) : null, blocks: [...blocks, ...deferred] };
+    }
+
+    // The table as one node: its grid (spans marked on the cell that starts them, the slots they
+    // cover as { covered }), the measured column widths and row heights, and every cell's own
+    // runs, fill, borders, padding and alignment.
+    function tableNode(table, op) {
+      const rows = [...table.rows].filter((tr) => getComputedStyle(tr).display !== "none");
+      if (!rows.length) return;
+      // The HTML table grid: which slot each cell starts in, and which slots spans cover.
+      const grid = [];
+      const placed = [];
+      rows.forEach((tr, r) => {
+        grid[r] = grid[r] || [];
+        let c = 0;
+        for (const td of tr.cells) {
+          while (grid[r][c]) c++;
+          const cspan = Math.max(1, td.colSpan || 1);
+          const rspan = Math.max(1, Math.min(td.rowSpan || 1, rows.length - r));
+          for (let i = 0; i < rspan; i++) {
+            grid[r + i] = grid[r + i] || [];
+            for (let j = 0; j < cspan; j++) grid[r + i][c + j] = i || j ? (i && j ? "hv" : i ? "v" : "h") : "origin";
+          }
+          placed.push({ r, c, cspan, rspan, td });
+          c += cspan;
+        }
+      });
+      const nCols = Math.max(...grid.map((row) => row.length));
+      // Column edges from the cells that start in each column; the last edge is the widest right side.
+      const left = Array(nCols).fill(null);
+      let right = -Infinity;
+      for (const p of placed) {
+        const rc = rectOf(p.td.getBoundingClientRect());
+        if (left[p.c] === null || rc.x < left[p.c]) left[p.c] = rc.x;
+        right = Math.max(right, rc.x + rc.w);
+      }
+      // A column no cell starts in (every cell over it spans in from the left) shares the gap evenly.
+      for (let c = 1; c < nCols; c++) {
+        if (left[c] !== null) continue;
+        let next = c + 1;
+        while (next < nCols && left[next] === null) next++;
+        left[c] = left[c - 1] + ((next < nCols ? left[next] : right) - left[c - 1]) / (next - c + 1);
+      }
+      const colW = left.map((x, c) => r2((c + 1 < nCols ? left[c + 1] : right) - x));
+      const rowRects = rows.map((tr) => rectOf(tr.getBoundingClientRect()));
+      const rowH = rowRects.map((rc) => rc.h);
+      const collapsed = getComputedStyle(table).borderCollapse === "collapse";
+      const empty = () => ({ runs: [], align: "left", valign: "top", lineHeight: 0, fill: null, borders: {}, padding: { t: 0, r: 0, b: 0, l: 0 }, colspan: 1, rowspan: 1 });
+      const cells = grid.map((row) => Array.from({ length: nCols }, (_, c) => (row[c] && row[c] !== "origin" ? { covered: row[c] } : empty())));
+      const later = [];
+      for (const p of placed) {
+        const cs = getComputedStyle(p.td);
+        const { runs, m, blocks } = cellContent(p.td);
+        later.push(...blocks);
+        const n = (prop) => parseFloat(cs[prop]) || 0;
+        const borders = cellBorders(cs);
+        if (collapsed) {
+          // With collapsed borders a row's rules (Slidev's `tr { border-bottom }`) are drawn along the
+          // cells in it; the wider rule wins, the cell's own on a tie.
+          const top = cellBorders(getComputedStyle(rows[p.r]));
+          const bottom = cellBorders(getComputedStyle(rows[p.r + p.rspan - 1]));
+          const edge = { t: top.t, b: bottom.b, l: p.c === 0 ? top.l : null, r: p.c + p.cspan === nCols ? top.r : null };
+          for (const side of ["t", "r", "b", "l"]) if (edge[side] && !(borders[side] && borders[side].width >= edge[side].width)) borders[side] = edge[side];
+        }
+        // The cell's own background, else the nearest row's or row group's behind it.
+        let fill = null;
+        for (let e = p.td; e && e !== table && !fill; e = e.parentElement) fill = parseColor(getComputedStyle(e).backgroundColor);
+        cells[p.r][p.c] = {
+          runs, align: textAlign(cs), valign: cs.verticalAlign,
+          lineHeight: m ? lineHeightOf(cs, m) : r2(parseFloat(cs.fontSize) * 1.2),
+          fill, borders,
+          padding: { t: n("paddingTop"), r: n("paddingRight"), b: n("paddingBottom"), l: n("paddingLeft") },
+          colspan: p.cspan, rowspan: p.rspan,
+        };
+      }
+      const rect = { x: left[0], y: rowRects[0].y, w: r2(colW.reduce((a, b) => a + b, 0)), h: r2(rowH.reduce((a, b) => a + b, 0)) };
+      if (onCanvas(rect)) nodes.push({ kind: "table", rect, colW, rowH, rows: cells, opacity: op });
+      if (table.caption) walk(table.caption, op);
+      for (const b of later) walk(b, op);
+    }
+
+    // A code block: one line of runs per source line, token colors kept, spaces untouched.
+    function codeNode(pre, cs, box, op) {
+      const lines = [[]];
+      const walker = document.createTreeWalker(pre, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        if (hiddenWithin(n.parentElement, pre)) continue;
+        const pcs = getComputedStyle(n.parentElement);
+        const style = runStyle(pcs, inheritedDeco(n.parentElement), null);
+        n.data.split("\n").forEach((part, i) => {
+          if (i > 0) lines.push([]);
+          if (part) lines[lines.length - 1].push({ ...style, text: part });
+        });
+      }
+      while (lines.length && !lines[lines.length - 1].length) lines.pop();
+      if (!lines.length) return;
+      const lh = parseFloat(cs.lineHeight);
+      nodes.push({
+        kind: "code", rect: contentBox(pre, cs, box), lines: lines.map((runs) => tidyRuns(runs, { whiteSpace: "pre" })),
+        lineHeight: r2(lh > 0 ? lh : parseFloat(cs.fontSize) * 1.5), opacity: op,
+      });
+    }
+
     function walk(el, opacity) {
       const tag = el.localName;
       if (SKIP_TAGS.has(tag)) return;
@@ -525,6 +669,16 @@
       const box = rotate ? unrotatedRect(el, r) : rc;
       if (tag === "img") {
         imageNode(el, cs, box, rotate, op);
+        return;
+      }
+      if (tag === "table") {
+        boxNode(el, cs, box, rotate, op);
+        tableNode(el, op);
+        return;
+      }
+      if (tag === "pre") {
+        boxNode(el, cs, box, rotate, op);
+        codeNode(el, cs, box, op);
         return;
       }
       boxNode(el, cs, box, rotate, op);

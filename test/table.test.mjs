@@ -53,3 +53,19 @@ test("writer embeds tables in graphic frames and passes lint", async () => {
   assert.match(z.text("ppt/slides/slide1.xml"), /<a:graphicData uri="http:\/\/schemas.openxmlformats.org\/drawingml\/2006\/table"><a:tbl>/);
   assert.ok(z.text("ppt/tableStyles.xml").includes(TABLE_STYLES.default));
 });
+
+test("plain tables write each cell's fill, borders, margins, anchor and merges, with the No Style table style", async () => {
+  const PLAIN = {
+    kind: "table", x: 0, y: 0, w: 4, h: 1, variant: "plain", header: true, colW: [2, 2], rowH: [0.5, 0.5],
+    rows: [
+      [{ paras: cell("Head"), fill: "#EEF4F0", borders: { b: { width: 1, color: "accent4" } }, margin: { l: 0.1, r: 0.1, t: 0.05, b: 0.05 }, anchor: "ctr", gridSpan: 2 }, { paras: [], hMerge: true }],
+      [{ paras: cell("a") }, { paras: cell("b"), fill: "lt2", fillAlpha: 0.5 }],
+    ],
+  };
+  const xml = tableXml(PLAIN, ctx);
+  assert.match(xml, /^<a:tbl><a:tblPr bandRow="0"><a:tableStyleId>\{2D5ABB26-0587-4C30-8999-92F81FD0307C\}<\/a:tableStyleId><\/a:tblPr>/);
+  assert.match(xml, /<a:tc gridSpan="2"><a:txBody>[\s\S]*?<\/a:txBody><a:tcPr marL="91440" marR="91440" marT="45720" marB="45720" anchor="ctr"><a:lnL w="0"><a:noFill\/><\/a:lnL><a:lnR w="0"><a:noFill\/><\/a:lnR><a:lnT w="0"><a:noFill\/><\/a:lnT><a:lnB w="12700"><a:solidFill><a:schemeClr val="accent4"\/><\/a:solidFill><\/a:lnB><a:solidFill><a:srgbClr val="EEF4F0"\/><\/a:solidFill><\/a:tcPr><\/a:tc><a:tc hMerge="1">/);
+  assert.match(xml, /<a:solidFill><a:schemeClr val="bg2"><a:alpha val="50000"\/><\/a:schemeClr><\/a:solidFill><\/a:tcPr><\/a:tc><\/a:tr><\/a:tbl>$/);
+  const buffer = await writePptx([{ layout: "blank", shapes: [PLAIN] }], DECK);
+  assert.deepEqual(await lintPackage(buffer), []);
+});

@@ -448,7 +448,7 @@
       for (const li of listEl.children) {
         if (li.localName !== "li") continue;
         const lcs = getComputedStyle(li);
-        if (lcs.display === "none" || lcs.visibility === "hidden") continue;
+        if (lcs.display === "none" || lcs.visibility === "hidden" || parseFloat(lcs.opacity) === 0) continue;
         const segment = [];
         const nested = [];
         const blocks = [];
@@ -458,6 +458,8 @@
           else if (c.localName === "ul" || c.localName === "ol") nested.push(c);
           else if (isInlineFlow(c)) segment.push(c);
           else if (c.localName === "p") {
+            const pcs = getComputedStyle(c);
+            if (pcs.display === "none" || pcs.visibility === "hidden" || parseFloat(pcs.opacity) === 0) continue;
             if (segment.length) segment.push(BREAK);
             segment.push(...c.childNodes);
           } else blocks.push(c);

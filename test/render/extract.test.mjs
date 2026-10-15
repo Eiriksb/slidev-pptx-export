@@ -56,6 +56,15 @@ test("lists: items, nesting levels, ordered start, marker color and measured ind
   assert.equal(s.nodes.filter((n) => n.kind === "text").length, 0, "list text lives only in the list node");
 });
 
+test("hidden list items and hidden paragraphs inside list items contribute no text", opts, async () => {
+  const s = await extractHtml(browser,
+    '<ul style="margin:0;font:16px/24px Arial"><li>Shown</li><li style="opacity:0">HIDDEN-LI</li><li><p style="display:none">HIDDEN-P</p>Visible</li></ul>');
+  const list = s.nodes.find((n) => n.kind === "list");
+  assert.deepEqual(list.items.map(textOf), ["Shown", "Visible"]);
+  const allText = s.nodes.flatMap((n) => (n.kind === "list" ? n.items : n.runs ? [n] : [])).map(textOf).join("|");
+  assert.ok(!allText.includes("HIDDEN"), allText);
+});
+
 test("svg, canvas and video become raster nodes tagged for screenshots, without walking their contents", opts, async () => {
   const s = await extractHtml(browser,
     '<svg width="50" height="50"><text x="0" y="20">svg text</text></svg><canvas width="40" height="40" style="display:block"></canvas><video width="40" height="30" style="display:block"></video>');

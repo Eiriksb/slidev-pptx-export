@@ -966,8 +966,9 @@
       });
     }
 
-    // The Chart.js chart drawn on a canvas: through the Vue component that owns it (vue-chartjs
-    // exposes it as `chart`), else Chart.getChart when Chart.js is a page global.
+    // The Chart.js chart drawn on a canvas - through the Vue component that owns it (vue-chartjs
+    // exposes it as `chart`), else Chart.getChart when Chart.js is a page global - or null, and
+    // the names of the Vue components around the canvas either way (for chartResolvers).
     function findChart(canvasEl) {
       const components = [];
       let chart = null;
@@ -988,7 +989,7 @@
         }
       }
       if (!chart && window.Chart && typeof window.Chart.getChart === "function") chart = window.Chart.getChart(canvasEl) || null;
-      return chart ? { chart, components } : null;
+      return { chart, components };
     }
 
     // How the value axis's tick labels write their number - {pre: "", suf: "%", decimals: 0} for 0%,
@@ -1129,13 +1130,17 @@
     }
 
     // A canvas is a native chart when it holds a Chart.js bar chart that can be drawn faithfully,
-    // else a picture (with the reason).
+    // else a picture (with the reason). The picture keeps the components around the canvas and
+    // the canvas's content box, so a chartResolvers entry can still put a chart there.
     function chartNode(canvasEl, cs, rc, box, rotate, op) {
       if (!onCanvas(rc)) return;
       const found = findChart(canvasEl);
       const picture = (reason) =>
-        nodes.push({ kind: "raster", id: mark(canvasEl), rect: rc, reason, label: labelOf(canvasEl), alt: canvasEl.getAttribute("aria-label") || "" });
-      if (!found) return picture("canvas");
+        nodes.push({
+          kind: "raster", id: mark(canvasEl), rect: rc, reason, label: labelOf(canvasEl), alt: canvasEl.getAttribute("aria-label") || "",
+          components: found.components, chartRect: contentBox(canvasEl, cs, box),
+        });
+      if (!found.chart) return picture("canvas");
       let spec = null;
       try {
         const parts = chartParts(found.chart);
@@ -1144,8 +1149,8 @@
         if (rotate) return picture("rotated chart");
         if (op < 0.999) return picture("chart opacity");
         spec = chartSpec(found.chart, parts);
-      } catch {
-        return picture("chart unreadable");
+      } catch (err) {
+        return picture(`chart unreadable: ${String((err && err.message) || err).split("\n")[0]}`);
       }
       // The chart is drawn inside the canvas's content box; a background, border or shadow on the
       // canvas itself is its own box.
@@ -1172,7 +1177,11 @@
       const rc = rectOf(r);
       const reason = rasterReason(el, cs, tag, op, rc);
       if (reason) {
-        if (onCanvas(rc)) nodes.push({ kind: "raster", id: mark(el), rect: rc, reason, label: labelOf(el), alt: el.getAttribute("alt") || el.getAttribute("aria-label") || "" });
+        if (!onCanvas(rc)) return;
+        const node = { kind: "raster", id: mark(el), rect: rc, reason, label: labelOf(el), alt: el.getAttribute("alt") || el.getAttribute("aria-label") || "" };
+        // A canvas pictured for its own styling may still be a chart a resolver replaces.
+        if (tag === "canvas") Object.assign(node, { components: findChart(el).components, chartRect: contentBox(el, cs, rc) });
+        nodes.push(node);
         return;
       }
       const t = transformOf(cs);

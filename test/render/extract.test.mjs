@@ -504,6 +504,32 @@ test("a chart found through its Vue component names the components around it; ot
   assert.deepEqual([plain.kind, plain.reason], ["raster", "canvas"]);
 });
 
+test("a canvas that becomes a picture still names the Vue components around it, and where a chart would go", chartOpts, async () => {
+  const setup = () => {
+    const [pieEl, brokenEl, plainEl, blurredEl] = document.querySelectorAll("canvas");
+    const pie = new Chart(pieEl, { type: "pie", data: { labels: ["a", "b"], datasets: [{ data: [1, 2] }] } });
+    Chart.getChart = () => undefined;
+    const owner = (name, exposed = {}) => ({ type: {}, exposed, parent: { type: { __name: name }, parent: { type: { name: "Slide" }, parent: null } } });
+    pieEl.__vueParentComponent = owner("GatedChart", { chart: { value: pie } });
+    // A chart whose options can't be read.
+    const broken = { config: { type: "bar" }, data: { datasets: [] }, canvas: brokenEl, get options() { throw new Error("options gone\nsecond line"); } };
+    brokenEl.__vueParentComponent = owner("BrokenChart", { chart: { value: broken } });
+    plainEl.__vueParentComponent = owner("Sketch");
+    blurredEl.__vueParentComponent = owner("Blurred");
+  };
+  const s = await extractHtml(browser,
+    `${LIB}<canvas width="200" height="100" style="display:block;padding:10px;border:2px solid #000"></canvas><canvas width="100" height="50" style="display:block"></canvas><canvas width="50" height="50" style="display:block"></canvas><canvas width="50" height="50" style="display:block;filter:blur(1px)"></canvas>`,
+    { setup });
+  assert.deepEqual(s.nodes.map((n) => [n.kind, n.reason, n.components]), [
+    ["raster", "chart type pie", ["GatedChart", "Slide"]],
+    ["raster", "chart unreadable: options gone", ["BrokenChart", "Slide"]],
+    ["raster", "canvas", ["Sketch", "Slide"]],
+    ["raster", "CSS filter", ["Blurred", "Slide"]],
+  ]);
+  const [pie] = s.nodes;
+  assert.deepEqual(pie.chartRect, { x: pie.rect.x + 12, y: pie.rect.y + 12, w: pie.rect.w - 24, h: pie.rect.h - 24 }, "the chart goes in the canvas's content box");
+});
+
 test("an SVG image is an image node, not a picture of an element", opts, async () => {
   const svg = `data:image/svg+xml;charset=utf-8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="#1a833b"/></svg>')}`;
   const s = await extractHtml(browser, `<img src="${svg}" alt="Logo" style="display:block;width:80px;height:40px">`);

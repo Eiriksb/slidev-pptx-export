@@ -136,6 +136,36 @@ test("a resolver's malformed result warns and keeps the chart drawn on the page"
   assert.equal(warnings.filter((w) => /^Warning: chart resolver ExampleChart failed \(/.test(w) && w.endsWith("using the chart drawn on the page.")).length, 1, warnings.join("\n"));
 });
 
+test("a chart exported as a picture is replaced by its component's chartResolvers chart, in the canvas's content box, with no picture notice", async () => {
+  // The same pictured chart on both slides: resolved before the master is built, so it stays on the slides.
+  const pictured = () => ({
+    kind: "raster", id: 2, rect: { x: 40, y: 200, w: 900, h: 240 }, chartRect: { x: 50, y: 210, w: 880, h: 220 }, reason: "chart type line", label: "canvas",
+    alt: "", components: ["ExampleChart", "Slide"], png: Buffer.from("png"),
+  });
+  const userConfig = { chartResolvers: { ExampleChart: () => ({ kind: "barchart", labels: ["From", "File"], datasets: [{ name: "Resolved", color: "1A833B", data: [5, 6] }], min: 0, max: 10 }) } };
+  const { args } = setup("# A\n\n---\n\n# B\n", { userConfig, slides: [scene(1, 0, "A", [pictured()]), scene(2, 1, "B", [pictured()])] });
+  const { result, warnings } = await withWarnings(() => renderSpecs(args));
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(result.masterShapes, []);
+  for (const spec of result.specs) {
+    assert.deepEqual(spec.shapes.map((x) => x.kind), ["chart"]);
+    const [shape] = spec.shapes;
+    assert.deepEqual(shape.chart.categories, ["From", "File"]);
+    assert.deepEqual([shape.x, shape.y, shape.w, shape.h], [0.6803, 2.8571, 11.9725, 2.9931]);
+  }
+  assert.equal(result.translatedCharts, 2);
+});
+
+test("a pictured chart with no resolver for its components stays a picture, with its notice", async () => {
+  const pictured = { kind: "raster", id: 2, rect: { x: 40, y: 200, w: 900, h: 240 }, chartRect: { x: 40, y: 200, w: 900, h: 240 }, reason: "chart type line", label: "canvas", alt: "", components: ["OtherChart"], png: Buffer.from("png") };
+  const userConfig = { chartResolvers: { ExampleChart: () => ({ kind: "barchart", labels: ["A"], datasets: [{ name: "S", data: [1] }] }) } };
+  const { args } = setup("# A\n", { userConfig, slides: [scene(1, 0, "A", [pictured])] });
+  const { result, warnings } = await withWarnings(() => renderSpecs(args));
+  assert.deepEqual(warnings, ["Notice: slide 1: canvas exported as a picture (chart type line)."]);
+  assert.deepEqual(result.specs[0].shapes.map((x) => x.kind), ["image"]);
+  assert.equal(result.translatedCharts, 0);
+});
+
 test("an element drawn identically on every slide moves to the slide master", async () => {
   const logo = () => ({ kind: "image", id: 9, rect: { x: 48, y: 498, w: 95, h: 26 }, src: "/logo.png", format: "png", fit: "fill", natural: null, alt: "Logo", border: null, shadow: null, opacity: 1, data: Buffer.from("same"), ext: "png" });
   const only = { ...logo(), rect: { x: 300, y: 300, w: 20, h: 20 } };

@@ -15,13 +15,16 @@ const UNUSED_KEYS = ["logo", "eyebrowClass", "cssVarColors"];
 
 // A chartResolvers entry for the chart's Vue component (or any component around it) overrides
 // the data captured from the page - but only a "barchart"; other resolver kinds describe HTML
-// the page already renders.
+// the page already renders. A canvas exported as a picture (a chart that couldn't be drawn
+// natively, or no readable chart at all) becomes the resolver's chart, in the canvas's content box.
 function resolveChart(node, config, S) {
-  const name = node.components.find((n) => typeof config.chartResolvers?.[n] === "function");
+  const name = (node.components || []).find((n) => typeof config.chartResolvers?.[n] === "function");
   if (!name) return;
   try {
     const resolved = config.chartResolvers[name](config.resolvedDataDir);
-    if (resolved && resolved.kind === "barchart") node.resolvedChart = groupedBarChart(resolved, S);
+    if (!resolved || resolved.kind !== "barchart") return;
+    node.resolvedChart = groupedBarChart(resolved, S);
+    if (node.kind === "raster") Object.assign(node, { kind: "chart", rect: node.chartRect || node.rect });
   } catch (err) {
     console.warn(`Warning: chart resolver ${name} failed (${err.message}) - using the chart drawn on the page.`);
   }
@@ -133,8 +136,13 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
   // static layout's warnings.
   let fromMarkdown = null;
 
-  // Elements every slide shares - and no slide content covers - go on the slide master once.
   const rendered = captured.slides.filter((s) => !s.error);
+  // Resolver charts first: a resolved chart is a chart, never a shared picture on the master.
+  for (const s of rendered) {
+    for (const node of s.nodes) if (node.kind === "chart" || node.kind === "raster") resolveChart(node, config, style);
+  }
+
+  // Elements every slide shares - and no slide content covers - go on the slide master once.
   const onMaster = uncoveredSignatures(rendered, repeatedSignatures(rendered));
   let masterShapes = [];
   if (onMaster.size) {
@@ -161,7 +169,6 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
       continue;
     }
     for (const node of scene.nodes) {
-      if (node.kind === "chart") resolveChart(node, config, style);
       if (node.kind === "raster") console.warn(`Notice: slide ${no}: ${node.label} exported as a picture (${node.reason}).`);
       if (node.kind === "missing") console.warn(`Notice: slide ${no}: image ${node.src} didn't load - skipped.`);
     }

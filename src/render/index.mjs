@@ -2,13 +2,13 @@
 // turn the scenes into SlideSpecs. A slide that couldn't be captured comes from the markdown
 // (the static export) instead.
 
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { startDeckServer } from "./server.mjs";
 import { loadChromium } from "./browser.mjs";
 import { captureDeck } from "./capture.mjs";
 import { sceneToSpec, shapesOf, unitsFor } from "./scene.mjs";
-import { deckStyle, layoutEach, groupedBarChart } from "../layout.mjs";
+import { deckStyle, layoutOne, groupedBarChart } from "../layout.mjs";
 
 // Config keys that only restate what the page shows; render mode reads the page instead.
 const UNUSED_KEYS = ["logo", "eyebrowClass", "cssVarColors"];
@@ -29,6 +29,9 @@ function resolveChart(node, config, S) {
     console.warn(`Warning: chart resolver ${name} failed (${err.message}) - using the chart drawn on the page.`);
   }
 }
+
+// What became of a raster node: a picture, or nothing when its screenshot failed.
+const pictureNotice = (where, n) => (n.png ? `Notice: ${where}: ${n.label} exported as a picture (${n.reason}).` : `Notice: ${where}: ${n.label} skipped (its picture could not be taken).`);
 
 const sha1 = (b) => createHash("sha1").update(b).digest("hex");
 
@@ -74,18 +77,18 @@ export function repeatedSignatures(scenes) {
 
 const intersects = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 
-// Whether a node hides what is drawn beneath it: pictures, tables, charts and code always do; a
-// box only when its fill is a gradient or an opaque color.
+// Whether a node draws anything: every kind does except a box with no fill, border, side bars or
+// shadow. Even a translucent veil or a line of text changes how what lies beneath it looks.
 function paints(n) {
   if (!n.rect) return false;
-  if (["image", "raster", "table", "chart", "code"].includes(n.kind)) return true;
-  return n.kind === "box" && !!n.fill && (!!n.fill.gradient || (n.fill.alpha ?? 1) >= 0.99) && (n.opacity ?? 1) >= 0.99;
+  if (n.kind !== "box") return true;
+  return !!(n.fill || n.border || n.sides?.length || n.shadow);
 }
 
 // The master is drawn beneath every slide's own content, so an element the page draws above
 // something slide-specific can't go there: a repeated signature is dropped when, on any scene, a
-// painting node that is not repeated comes before it in DOM order and overlaps it. A dropped
-// signature stays on the slides, so it can cover later ones - repeat until nothing changes.
+// node that draws something and is not repeated comes before it in DOM order and overlaps it. A
+// dropped signature stays on the slides, so it can cover later ones - repeat until nothing changes.
 export function uncoveredSignatures(scenes, repeated) {
   const kept = new Set(repeated);
   const sigs = scenes.map((s) => signaturesOf(s.nodes));
@@ -105,24 +108,49 @@ export function uncoveredSignatures(scenes, repeated) {
   return kept;
 }
 
+// A slide that couldn't be captured, from the markdown: its own slide laid out alone, numbered as
+// the export's slide `no`. Slidev numbers a slide imported with `src:` within its own file, which
+// the static parser doesn't read, so that one (or one with no markdown slide) is left blank.
+function markdownFallback(scene, no, { inputPath, parsed, codeStore, config }) {
+  const imported = scene.filepath && resolve(scene.filepath) !== resolve(inputPath);
+  const slide = !imported && Number.isInteger(scene.sourceIndex) ? parsed[scene.sourceIndex] : null;
+  const why = `Warning: slide ${no} could not be rendered (${scene.error})`;
+  if (!slide) {
+    console.warn(`${why} - left blank (${imported ? "no markdown fallback for imported slides" : "its markdown slide wasn't found"}).`);
+    return [{ layout: "blank", placeholders: {}, shapes: [] }];
+  }
+  console.warn(`${why} - exported from markdown instead.`);
+  return layoutOne(slide, no - 1, codeStore, config);
+}
+
 export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, codeStore, screenshots = false, deps = {} }) {
   const { start = startDeckServer, chromiumFor = loadChromium, capture = captureDeck } = deps;
   const unused = UNUSED_KEYS.filter((k) => userConfig[k] != null);
   if (unused.length) console.warn(`Notice: render mode ignores ${unused.join(", ")} from pptx.config.mjs - the rendered page already shows them.`);
 
-  // Playwright first, so a missing browser fails before Slidev is started.
+  // Playwright and its Chromium first: a missing package or browser fails before Slidev starts.
   const chromium = await chromiumFor(dirname(inputPath));
-  const server = await start({ inputPath });
+  let browser;
+  try {
+    browser = await chromium.launch();
+  } catch (err) {
+    throw new Error(`render mode could not launch Playwright's Chromium (${String(err.message || err).split("\n")[0]}) - run \`npx playwright install chromium\`.`, { cause: err });
+  }
   let captured;
   try {
-    captured = await capture({ baseUrl: server.url, chromium, timeout: config.render?.timeout ?? 15000, screenshots, slidevVersion: server.version });
-  } catch (err) {
-    // A deck that never boots only shows up as a capture timeout; Slidev's own output says why.
-    const output = server.log();
-    if (!output) throw err;
-    throw new Error(`${err.message}\n\nSlidev output:\n${output}`, { cause: err });
+    const server = await start({ inputPath });
+    try {
+      captured = await capture({ baseUrl: server.url, browser, timeout: config.render?.timeout ?? 15000, screenshots, slidevVersion: server.version });
+    } catch (err) {
+      // A deck that fails to build or boot shows up here; Slidev's own output says why.
+      const output = server.log();
+      if (!output) throw err;
+      throw new Error(`${err.message}\n\nSlidev output:\n${output}`, { cause: err });
+    } finally {
+      await server.stop();
+    }
   } finally {
-    await server.stop();
+    await browser.close();
   }
 
   // A non-16:9 deck keeps its shape: the slide height follows Slidev's canvas.
@@ -132,9 +160,6 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
   }
   const style = deckStyle(config);
   const sceneStyle = { geometry: style.geometry, theme: style.theme, fonts: config.fonts };
-  // Laid out from the markdown only when a slide needs it, so a clean render prints none of the
-  // static layout's warnings.
-  let fromMarkdown = null;
 
   const rendered = captured.slides.filter((s) => !s.error);
   // Resolver charts first: a resolved chart is a chart, never a shared picture on the master.
@@ -149,7 +174,7 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
     const sigs = rendered.map((s) => signaturesOf(s.nodes));
     const first = rendered[0];
     const shared = first.nodes.filter((n, i) => onMaster.has(sigs[0][i]));
-    for (const n of shared) if (n.kind === "raster") console.warn(`Notice: slide master: ${n.label} exported as a picture (${n.reason}).`);
+    for (const n of shared) if (n.kind === "raster") console.warn(pictureNotice("slide master", n));
     masterShapes = shared.flatMap((n) => shapesOf(n, unitsFor(first, style.geometry), sceneStyle));
     rendered.forEach((s, k) => {
       s.nodes = s.nodes.filter((n, i) => !onMaster.has(sigs[k][i]));
@@ -161,15 +186,13 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
   for (const scene of captured.slides) {
     const no = specs.length + 1;
     if (scene.error) {
-      console.warn(`Warning: slide ${no} could not be rendered (${scene.error}) - exported from markdown instead.`);
-      fromMarkdown ??= layoutEach(parsed, codeStore, config);
-      const fallback = fromMarkdown[scene.sourceIndex] || [];
+      const fallback = markdownFallback(scene, no, { inputPath, parsed, codeStore, config });
       specs.push(...fallback);
       shots.push(...fallback.map(() => null));
       continue;
     }
     for (const node of scene.nodes) {
-      if (node.kind === "raster") console.warn(`Notice: slide ${no}: ${node.label} exported as a picture (${node.reason}).`);
+      if (node.kind === "raster") console.warn(pictureNotice(`slide ${no}`, node));
       if (node.kind === "missing") console.warn(`Notice: slide ${no}: image ${node.src} didn't load - skipped.`);
     }
     specs.push(sceneToSpec(scene, sceneStyle));

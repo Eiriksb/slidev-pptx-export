@@ -7,23 +7,28 @@ import { imageSize } from "image-size";
 
 const EXTRACT = readFileSync(new URL("./extract.js", import.meta.url), "utf8");
 
-export async function captureDeck({ baseUrl, chromium, timeout = 15000, screenshots = false, slidevVersion = "unknown" }) {
-  const browser = await chromium.launch();
+// `browser`: a launched Playwright browser to use (left open), else one is launched from `chromium`
+// (and closed).
+export async function captureDeck({ baseUrl, browser: given = null, chromium, timeout = 15000, screenshots = false, slidevVersion = "unknown" }) {
+  const browser = given ?? (await chromium.launch());
+  let page = null;
   try {
-    const page = await browser.newPage({ viewport: { width: 980, height: 552 }, deviceScaleFactor: 2 });
+    page = await browser.newPage({ viewport: { width: 980, height: 552 }, deviceScaleFactor: 2 });
     page.setDefaultTimeout(timeout);
     await open(page, `${baseUrl}/1?print`);
     try {
       await page.waitForFunction(() => window.__slidev__?.nav?.total > 0 && !!document.querySelector(".slidev-page"));
     } catch {
-      throw new Error(`unsupported Slidev version ${slidevVersion}: the page has no slide navigation data (window.__slidev__) or .slidev-page elements`);
+      throw new Error(await whyNoDeck(page, timeout, slidevVersion));
     }
     const info = await page.evaluate(() => {
       const s = window.__slidev__;
       return {
         canvasWidth: s.configs.canvasWidth || 980,
         aspectRatio: s.configs.aspectRatio || 16 / 9,
-        slides: s.nav.slides.map((r) => ({ no: r.no, sourceIndex: r.meta?.slide?.sourceIndex ?? r.no - 1, notes: r.meta?.slide?.note || null })),
+        // sourceIndex counts within the slide's own markdown file (filepath; an imported `src:` file
+        // has its own).
+        slides: s.nav.slides.map((r) => ({ no: r.no, sourceIndex: r.meta?.slide?.sourceIndex ?? null, filepath: r.meta?.slide?.filepath || null, notes: r.meta?.slide?.note || null })),
       };
     });
     // Slidev's own slide height: Math.ceil(canvasWidth / aspectRatio) (980 x 16/9 -> 552).
@@ -34,13 +39,31 @@ export async function captureDeck({ baseUrl, chromium, timeout = 15000, screensh
       try {
         slides.push(await captureSlide(page, baseUrl, s, canvas, screenshots));
       } catch (err) {
-        slides.push({ index: s.no, sourceIndex: s.sourceIndex, error: String(err.message || err).split("\n")[0] });
+        slides.push({ index: s.no, sourceIndex: s.sourceIndex, filepath: s.filepath, error: String(err.message || err).split("\n")[0] });
       }
     }
     return { canvas, slides };
   } finally {
-    await browser.close();
+    if (given) await page?.close();
+    else await browser.close();
   }
+}
+
+// The first page never showed Slidev's slide data and slides. A page that drew nothing is a deck
+// that didn't load in time (Slidev's first start builds its dependencies, which can take a while);
+// one with Vite's error overlay didn't build; one that drew an app without them is a Slidev whose
+// page this tool doesn't know.
+async function whyNoDeck(page, timeout, slidevVersion) {
+  const state = await page
+    .evaluate(() => {
+      const root = document.getElementById("app") || document.body;
+      const drawn = !!root && [...root.children].some((e) => !/^(SCRIPT|STYLE|LINK|NOSCRIPT|TEMPLATE)$/.test(e.tagName));
+      return document.querySelector("vite-error-overlay") ? "error" : drawn ? "drawn" : "blank";
+    })
+    .catch(() => "blank");
+  if (state === "error") return "the deck failed to build (Vite reported an error)";
+  if (state === "blank") return `the deck didn't load within ${timeout} ms (Slidev may still be starting up - raise render.timeout in pptx.config.mjs)`;
+  return `unsupported Slidev version ${slidevVersion}: the page has no slide navigation data (window.__slidev__) or .slidev-page elements`;
 }
 
 async function captureSlide(page, baseUrl, s, canvas, screenshots) {

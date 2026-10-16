@@ -12,21 +12,26 @@ const scene = (index, sourceIndex, title, nodes = []) => ({
 });
 const titleOf = (spec) => spec.placeholders.title.map((p) => p.runs.map((r) => r.text).join("")).join("");
 
-function setup(md, { userConfig = {}, slides, canvas = { w: 980, h: 552 }, captureError = null, serverLog = null } = {}) {
+function setup(md, { userConfig = {}, slides, canvas = { w: 980, h: 552 }, captureError = null, serverLog = null, launchError = null } = {}) {
   const config = mergeConfig(userConfig);
   const codeStore = [];
   const parsed = splitSlides(md).slides.map((s) => ({ ...parseSlide(s.content, codeStore, config), frontmatter: s.frontmatter }));
-  const calls = { stopped: 0 };
+  const calls = { started: 0, stopped: 0, closed: 0 };
+  const browser = { close: async () => { calls.closed++; } };
   const deps = {
-    chromiumFor: async () => ({ fake: true }),
-    start: async () => ({
-      url: "http://127.0.0.1:1",
-      version: "52",
-      log: () => serverLog ?? "",
-      stop: async () => { calls.stopped++; },
+    chromiumFor: async () => ({
+      launch: async () => {
+        if (launchError) throw launchError;
+        return browser;
+      },
     }),
-    capture: async ({ baseUrl }) => {
+    start: async () => {
+      calls.started++;
+      return { url: "http://127.0.0.1:1", version: "52", log: () => serverLog ?? "", stop: async () => { calls.stopped++; } };
+    },
+    capture: async ({ baseUrl, browser: given }) => {
       calls.baseUrl = baseUrl;
+      calls.browserGiven = given === browser;
       if (captureError) throw captureError;
       return { canvas, slides };
     },
@@ -64,10 +69,56 @@ test("rendered scenes become specs; a slide that failed falls back to its markdo
   assert.equal(result.translatedCharts, 0);
 });
 
+test("only a failed slide is laid out from the markdown, numbered by its place in the .pptx", async () => {
+  // Both "Full" slides are too full for the static layout; only the one that failed is laid out, as slide 2.
+  const full = (t) => `# ${t}\n\n` + Array.from({ length: 60 }, (_, i) => `Line ${i} of a paragraph long enough to wrap across the body of the slide at least once or twice.`).join("\n\n");
+  const md = ["# Cover", full("Rendered"), "---\nhide: true\n---\n\n# Hidden", full("Failed")].join("\n\n---\n\n");
+  const { args } = setup(md, { slides: [scene(1, 0, "Cover"), { index: 2, sourceIndex: 3, filepath: "/deck/slides.md", error: "boom" }, scene(3, 1, "Rendered")] });
+  const { result, warnings } = await withWarnings(() => renderSpecs(args));
+  assert.deepEqual(result.specs.map(titleOf), ["Cover", "Failed", "Rendered"]);
+  assert.deepEqual(warnings, [
+    "Warning: slide 2 could not be rendered (boom) - exported from markdown instead.",
+    'Warning: slide 2 "Failed" is still too full after shrinking to 55% - content may run off the slide.',
+  ]);
+});
+
+test("a failed slide with no markdown slide to fall back on is left blank, with a warning saying why", async () => {
+  const md = "# A\n\n---\n\n# B\n";
+  const failed = (extra) => ({ index: 2, sourceIndex: 1, error: "boom", ...extra });
+  const cases = [
+    [{ sourceIndex: null }, "left blank (its markdown slide wasn't found)"],
+    [{ sourceIndex: 7 }, "left blank (its markdown slide wasn't found)"],
+    [{ filepath: "/deck/pages/imported.md" }, "left blank (no markdown fallback for imported slides)"],
+  ];
+  for (const [extra, outcome] of cases) {
+    const { args } = setup(md, { slides: [scene(1, 0, "A"), failed(extra), scene(3, 1, "B")] });
+    const { result, warnings } = await withWarnings(() => renderSpecs(args));
+    assert.equal(result.specs.length, 3, JSON.stringify(extra));
+    assert.deepEqual(result.specs[1], { layout: "blank", placeholders: {}, shapes: [] });
+    assert.deepEqual(result.screenshots, [null, null, null]);
+    assert.deepEqual(warnings, [`Warning: slide 2 could not be rendered (boom) - ${outcome}.`]);
+  }
+  // The entry file itself (however Slidev spells the path) is a markdown fallback.
+  const { args } = setup(md, { slides: [scene(1, 0, "A"), failed({ filepath: "/deck/./slides.md" })] });
+  assert.deepEqual((await withWarnings(() => renderSpecs(args))).result.specs.map(titleOf), ["A", "B"]);
+});
+
 test("the server is stopped even when capture fails, and the error propagates", async () => {
   const { args, calls } = setup("# A\n", { captureError: new Error("browser crashed") });
   await assert.rejects(renderSpecs(args), /browser crashed/);
-  assert.equal(calls.stopped, 1);
+  assert.deepEqual([calls.stopped, calls.closed], [1, 1]);
+});
+
+test("Chromium is launched before Slidev starts: a browser that won't launch stops the export with no Slidev output", async () => {
+  const { args, calls } = setup("# A\n", { launchError: new Error("browserType.launch: Executable doesn't exist at /x/chrome\nLooks like Playwright was just installed"), serverLog: "boom line" });
+  await assert.rejects(renderSpecs(args), (err) => {
+    assert.equal(err.message, "render mode could not launch Playwright's Chromium (browserType.launch: Executable doesn't exist at /x/chrome) - run `npx playwright install chromium`.");
+    return true;
+  });
+  assert.equal(calls.started, 0);
+  const ok = setup("# A\n", { slides: [scene(1, 0, "A")] });
+  await withWarnings(() => renderSpecs(ok.args));
+  assert.deepEqual([ok.calls.browserGiven, ok.calls.closed, ok.calls.stopped], [true, 1, 1], "capture gets the launched browser; it is closed after");
 });
 
 test("a capture failure carries Slidev's own output, and the server is still stopped", async () => {
@@ -86,6 +137,14 @@ test("a capture failure with no Slidev output keeps its message as is", async ()
     assert.equal(err.message, "browser crashed");
     return true;
   });
+});
+
+test("a picture that could not be taken is skipped with its own notice, not announced as a picture", async () => {
+  const lost = { kind: "raster", id: 0, rect: { x: 0, y: 0, w: 10, h: 10 }, reason: "inline SVG", label: "svg.icon", alt: "", png: null };
+  const { args } = setup("# A\n", { slides: [scene(1, 0, "A", [lost])] });
+  const { result, warnings } = await withWarnings(() => renderSpecs(args));
+  assert.deepEqual(warnings, ["Notice: slide 1: svg.icon skipped (its picture could not be taken)."]);
+  assert.deepEqual(result.specs[0].shapes, []);
 });
 
 test("config keys render mode doesn't need are named once", async () => {
@@ -228,13 +287,22 @@ test("a band the page draws after the logo doesn't stop the logo going to the ma
   assert.deepEqual(result.specs.map((sp) => sp.shapes.length), [1, 0]);
 });
 
-test("a translucent box before the logo doesn't hide it, so the logo still goes to the master", async () => {
-  const veil = boxNode(BAND, C("1F2937"));
-  veil.fill.alpha = 0.3;
+test("anything visible drawn before the logo keeps it off the master: a translucent veil, a faded box, a side bar, text", async () => {
+  const veil = boxNode(BAND, { hex: "1F2937", alpha: 0.3 });
   const faded = boxNode(BAND, C("1F2937"), { opacity: 0.5 });
-  const { args } = setup("# A\n\n---\n\n# B\n", { slides: [scene(1, 0, "A", [veil, faded, footerLogo()]), scene(2, 1, "B", [footerLogo()])] });
-  const { result } = await withWarnings(() => renderSpecs(args));
-  assert.deepEqual(result.masterShapes.map((x) => x.alt), ["Logo"]);
+  const bar = boxNode(BAND, null, { sides: [{ side: "t", width: 2, color: C("1A833B") }] });
+  const outline = boxNode(BAND, null, { border: { width: 1, color: C("1A833B") } });
+  const shadow = boxNode(BAND, null, { shadow: { x: 0, y: 2, blur: 4, color: C("000000") } });
+  const caption = { kind: "text", role: "body", rect: { x: 40, y: 500, w: 200, h: 20 }, align: "left", lineHeight: 20, singleLine: true, opacity: 1, runs: [run("Caption")] };
+  for (const before of [veil, faded, bar, outline, shadow, caption]) {
+    const { args } = setup("# A\n\n---\n\n# B\n", { slides: [scene(1, 0, "A", [before, footerLogo()]), scene(2, 1, "B", [footerLogo()])] });
+    const { result } = await withWarnings(() => renderSpecs(args));
+    assert.deepEqual(result.masterShapes, [], JSON.stringify(before));
+  }
+  // A box that draws nothing doesn't count.
+  const empty = boxNode(BAND, null);
+  const { args } = setup("# A\n\n---\n\n# B\n", { slides: [scene(1, 0, "A", [empty, footerLogo()]), scene(2, 1, "B", [footerLogo()])] });
+  assert.deepEqual((await withWarnings(() => renderSpecs(args))).result.masterShapes.map((x) => x.alt), ["Logo"]);
 });
 
 test("a repeated element that a dropped repeated one would cover is dropped too", async () => {

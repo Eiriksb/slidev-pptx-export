@@ -248,3 +248,22 @@ test("a background the box can't draw is pictured without the element's contents
   assert.ok(rim > 0.9, `the border is kept: ${(rim * 100).toFixed(1)}% black`);
   assert.ok((await darkShare(svg.png)) > 0.9, "the child is visible again for its own picture");
 });
+
+test("a deck that never shows its slides is reported for what it is: not loaded in time, failed to build, or an unknown Slidev", opts, async (t) => {
+  const cases = [
+    ['<div id="app"></div>', /^the deck didn't load within 2000 ms \(Slidev may still be starting up - raise render\.timeout in pptx\.config\.mjs\)$/],
+    ['<div id="app"></div><vite-error-overlay></vite-error-overlay>', /^the deck failed to build \(Vite reported an error\)$/],
+    ['<div id="app"><main class="some-other-app">Hello</main></div>', /^unsupported Slidev version 99\.0\.0: /],
+  ];
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  for (const [body, message] of cases) {
+    const baseUrl = await serve(t, `<!doctype html><html><body>${body}</body></html>`);
+    await assert.rejects(captureDeck({ baseUrl, browser, timeout: 2000, slidevVersion: "99.0.0" }), (err) => {
+      assert.match(err.message, message);
+      return true;
+    });
+  }
+  assert.ok(browser.isConnected(), "a browser passed in is left open");
+  assert.equal(browser.contexts().flatMap((c) => c.pages()).length, 0, "its page is closed");
+});

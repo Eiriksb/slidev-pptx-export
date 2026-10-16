@@ -10,7 +10,6 @@ import { mergeConfig } from "./config.mjs";
 import { splitSlides, parseSlide } from "./parse.mjs";
 import { layoutDeck, deckStyle } from "./layout.mjs";
 import { writePptx } from "./ooxml/index.mjs";
-import { renderSpecs } from "./render/index.mjs";
 
 const LOGO_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif"]);
 
@@ -35,7 +34,8 @@ function usableLogo(logo, configDir) {
  * @param {object} [options.config] - see default-config.mjs; typically loaded from a deck's pptx.config.mjs
  * @param {string} [options.configDir] - directory config-relative paths (logo.path) resolve against; defaults to inputPath's directory
  * @param {boolean|{screenshots?: boolean}} [options.render] - render the deck with its own Slidev in Chromium and convert what is drawn (see README "Render mode")
- * @returns {Promise<{ outputPath: string, slideCount: number, translatedCharts: number, unresolvedCharts: string[] }>}
+ * @returns {Promise<{ outputPath: string, slideCount: number, translatedCharts: number, unresolvedCharts: string[], screenshots?: (Buffer|null)[] }>}
+ *   `screenshots` (render mode with `screenshots: true`): Slidev's own screenshot of each exported slide, null for a slide exported from markdown
  */
 export async function convert(options) {
   const inputPath = resolve(options.inputPath);
@@ -66,6 +66,8 @@ export async function convert(options) {
   let style;
   let rendered = null;
   if (options.render) {
+    // Loaded only here: the static export never touches the browser pipeline.
+    const { renderSpecs } = await import("./render/index.mjs");
     rendered = await renderSpecs({ inputPath, userConfig: options.config || {}, config, parsed, codeStore, screenshots: options.render.screenshots === true });
     ({ specs, style } = rendered);
   } else {

@@ -67,11 +67,10 @@ async function captureSlide(page, baseUrl, s, canvas, screenshots) {
     const shown = await hide(page, above);
     for (const node of own) {
       if (node.kind === "image") await loadImage(page, node);
-      else node.png = await elementShot(page, node.id);
+      else node.png = await pictureOf(page, node);
     }
     await shown();
   }
-  // Last: it hides the slide's contents.
   if (scene.background.raster) scene.background.png = await backgroundShot(page, sel);
   return { ...scene, index: s.no, sourceIndex: s.sourceIndex, notes: s.notes, screenshot };
 }
@@ -194,6 +193,12 @@ async function hide(page, selectors) {
   return () => style.evaluate((el) => el.remove());
 }
 
+// A raster node's picture: its element as drawn - or, for a background picture, without its contents.
+function pictureOf(page, node) {
+  if (!node.contentsHidden) return elementShot(page, node.id);
+  return withoutContents(page, `[data-pptx-node="${node.id}"]`, () => elementShot(page, node.id));
+}
+
 async function elementShot(page, id) {
   try {
     return await page.locator(`[data-pptx-node="${id}"]`).screenshot({ animations: "disabled" });
@@ -202,14 +207,44 @@ async function elementShot(page, id) {
   }
 }
 
-// The slide's background alone: everything inside the layout and the global layers hidden, then
-// one screenshot.
+// Runs `shoot` with the contents of the element `sel` matches hidden - its children, and its own
+// text made transparent (glyphs only: a border in currentColor stays) - and puts them back after.
+async function withoutContents(page, sel, shoot) {
+  const found = await page.evaluate((s) => {
+    const el = document.querySelector(s);
+    if (!el) return false;
+    el.__pptxStyles = [el, ...el.children].map((e) => [e, e.getAttribute("style")]);
+    for (const c of el.children) c.style.setProperty("visibility", "hidden", "important");
+    el.style.setProperty("-webkit-text-fill-color", "transparent", "important");
+    el.style.setProperty("-webkit-text-stroke-width", "0", "important");
+    el.style.setProperty("text-shadow", "none", "important");
+    el.style.setProperty("text-decoration-color", "transparent", "important");
+    return true;
+  }, sel);
+  try {
+    return await shoot();
+  } finally {
+    if (found) {
+      await page.evaluate((s) => {
+        const el = document.querySelector(s);
+        for (const [e, style] of el.__pptxStyles) style == null ? e.removeAttribute("style") : e.setAttribute("style", style);
+        delete el.__pptxStyles;
+      }, sel);
+    }
+  }
+}
+
+// The slide's background alone: one screenshot of the page with the layout's contents and the
+// global layers hidden.
 async function backgroundShot(page, sel) {
   await page.evaluate((pageSel) => {
     const pageEl = document.querySelector(pageSel);
-    const root = pageEl.querySelector(".slidev-layout") || pageEl.firstElementChild || pageEl;
-    for (const c of root.children) c.style.setProperty("visibility", "hidden", "important");
+    (pageEl.querySelector(".slidev-layout") || pageEl.firstElementChild || pageEl).setAttribute("data-pptx-background", "");
   }, sel);
-  await hide(page, ["[data-pptx-layer]"]);
-  return page.locator(sel).screenshot({ animations: "disabled" });
+  const shown = await hide(page, ["[data-pptx-layer]"]);
+  try {
+    return await withoutContents(page, "[data-pptx-background]", () => page.locator(sel).screenshot({ animations: "disabled" }));
+  } finally {
+    await shown();
+  }
 }

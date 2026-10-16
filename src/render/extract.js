@@ -533,12 +533,23 @@
       if (cs.clipPath && cs.clipPath !== "none") return "clip-path";
       if (cs.mixBlendMode && cs.mixBlendMode !== "normal") return "blend mode";
       if ((cs.backgroundClip || cs.webkitBackgroundClip) === "text") return "background-clip: text";
-      const bg = backgroundImageOf(cs, rc);
-      if (bg && bg.unsupported) return bg.unsupported;
-      if (bg && bg.src && op < 0.999) return "image opacity";
+      // A replaced element's background is part of its picture. Any other element's is drawn
+      // behind its contents on its own (see boxNode), so its contents stay native.
+      if (REPLACED.has(tag)) {
+        const why = backgroundReason(backgroundImageOf(cs, rc), op);
+        if (why) return why;
+      }
       const t = transformOf(cs);
       if (t && !t.rotateOnly) return "transform";
       if (t && el.children.length) return "rotated content";
+      return null;
+    }
+
+    // Why an element's background (backgroundImageOf's result) can't be drawn natively, as a box
+    // fill or an image node: the reason, or null.
+    function backgroundReason(bg, op) {
+      if (bg && bg.unsupported) return bg.unsupported;
+      if (bg && bg.src && op < 0.999) return "image opacity";
       return null;
     }
 
@@ -688,7 +699,12 @@
       // A gradient fills the box, over its background color.
       if (bg && bg.gradient) d.fill = { gradient: bg.gradient, base: d.fill };
       if (d.fill || d.border || d.sides || d.shadow) nodes.push({ kind: "box", rect: rc, ...d, opacity: op, rotate });
-      if (bg && bg.src) {
+      const why = backgroundReason(bg, op);
+      if (why) {
+        // A background the box can't draw: a picture of the element with its contents hidden
+        // (capture.mjs), drawn behind them.
+        nodes.push({ kind: "raster", id: mark(el), rect: rectOf(el.getBoundingClientRect()), reason: why, label: `${labelOf(el)} background`, alt: "", contentsHidden: true });
+      } else if (bg && bg.src) {
         nodes.push({ kind: "image", id: mark(el), rect: rc, src: bg.src, format: bg.format, fit: bg.fit, natural: null, alt: "", border: null, shadow: null, opacity: op, rotate });
       }
     }

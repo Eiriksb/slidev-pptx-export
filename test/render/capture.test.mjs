@@ -29,12 +29,13 @@ async function serve(t, html) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 
-// The share of a PNG's pixels that are (opaque and) near black, decoded in Chromium.
-async function darkShare(png) {
+// The share of a PNG's pixels that are (opaque and) near black, decoded in Chromium; within
+// `region` ({ x0, y0, x1, y1 } as fractions of the image) when given.
+async function darkShare(png, region = { x0: 0, y0: 0, x1: 1, y1: 1 }) {
   const browser = await chromium.launch();
   try {
     const tab = await browser.newPage();
-    return await tab.evaluate(async (b64) => {
+    return await tab.evaluate(async ({ b64, region: r }) => {
       const img = new Image();
       img.src = `data:image/png;base64,${b64}`;
       await img.decode();
@@ -43,11 +44,13 @@ async function darkShare(png) {
       c.height = img.height;
       const x = c.getContext("2d");
       x.drawImage(img, 0, 0);
-      const d = x.getImageData(0, 0, c.width, c.height).data;
+      const [x0, y0] = [Math.round(r.x0 * c.width), Math.round(r.y0 * c.height)];
+      const [w, h] = [Math.round(r.x1 * c.width) - x0, Math.round(r.y1 * c.height) - y0];
+      const d = x.getImageData(x0, y0, w, h).data;
       let dark = 0;
       for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] < 90 && d[i + 3] > 200) dark++;
       return dark / (d.length / 4);
-    }, png.toString("base64"));
+    }, { b64: png.toString("base64"), region });
   } finally {
     await browser.close();
   }
@@ -226,4 +229,22 @@ test("a picture never shows what is drawn above it: the slide is hidden for the 
     assert.ok(dark < 0.01, `${n.layer ?? "page"} picture: ${(dark * 100).toFixed(1)}% black`);
   }
   assert.ok((await darkShare(slide.screenshot)) > 0.02, "Slidev's own screenshot shows everything");
+});
+
+test("a background the box can't draw is pictured without the element's contents, which stay native; the contents come back afterwards", opts, async (t) => {
+  // The border takes the text color (currentColor): hiding the text must not hide the border.
+  const card =
+    '<div class="card" style="width:300px;height:150px;box-sizing:border-box;border:4px solid;color:#000;font:40px Arial;background:repeating-linear-gradient(45deg, #ffcc00 0 10px, #ffffff 10px 20px)">' +
+    'Card text<svg width="40" height="40" style="display:block"><rect width="40" height="40" fill="#000"/></svg></div>';
+  const html = `<!doctype html><html><head><style>body{margin:0}</style>${slidevData(1)}</head><body>${page(1, card)}</body></html>`;
+  const { slides: [slide] } = await captureDeck({ baseUrl: await serve(t, html), chromium, timeout: 15000 });
+  assert.deepEqual(slide.nodes.map((n) => [n.kind, n.kind === "text" ? textOf(n) : n.label]), [
+    ["box", undefined], ["raster", "div.card background"], ["text", "Card text"], ["raster", "svg"],
+  ]);
+  const [, background, , svg] = slide.nodes;
+  const inside = await darkShare(background.png, { x0: 0.05, y0: 0.1, x1: 0.95, y1: 0.9 });
+  assert.ok(inside < 0.01, `text or child in the background picture: ${(inside * 100).toFixed(1)}% black`);
+  const rim = await darkShare(background.png, { x0: 0, y0: 0, x1: 1, y1: 0.02 });
+  assert.ok(rim > 0.9, `the border is kept: ${(rim * 100).toFixed(1)}% black`);
+  assert.ok((await darkShare(svg.png)) > 0.9, "the child is visible again for its own picture");
 });

@@ -102,10 +102,32 @@ test("images: content box, natural size, object-fit and border; a broken image i
   assert.equal(missing.src, "http://127.0.0.1:9/nope.png");
 });
 
-test("a translucent background image is a picture, like a translucent img", opts, async () => {
+test("a translucent background image is a picture behind the element's contents, which stay native with the element's opacity", opts, async () => {
   const s = await extractHtml(browser,
-    `<div style="width:100px;height:60px;opacity:0.5;background-image:url(${PNG});background-size:cover;background-position:center"></div>`);
-  assert.deepEqual(s.nodes.map((n) => [n.kind, n.reason]), [["raster", "image opacity"]]);
+    `<div class="hero" style="width:200px;height:60px;opacity:0.5;background-image:url(${PNG});background-size:cover;background-position:center"><p style="margin:0;font:20px Arial;color:#000">Over the photo</p></div>`);
+  assert.deepEqual(s.nodes.map((n) => [n.kind, n.reason, n.label, n.contentsHidden]), [
+    ["raster", "image opacity", "div.hero background", true],
+    ["text", undefined, undefined, undefined],
+  ]);
+  const [picture, text] = s.nodes;
+  assert.deepEqual(picture.rect, { x: 40, y: 40, w: 200, h: 60 });
+  assert.deepEqual([textOf(text), text.opacity], ["Over the photo", 0.5]);
+});
+
+test("a card whose background the box can't draw (an SVG pattern) is its box, a picture of that background, then its native contents", opts, async () => {
+  const pattern = `data:image/svg+xml;charset=utf-8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><circle cx="4" cy="4" r="1" fill="#1a833b"/></svg>')}`;
+  const s = await extractHtml(browser,
+    `<div class="kv-card" style="width:276px;padding:20px;border-radius:8px;border:1px solid #D9E3DB;background:#EEF4F0 url(&quot;${pattern}&quot;);box-shadow:0 2px 4px rgba(0,0,0,0.2)">` +
+      '<h3 style="margin:0;font:24px Arial">First point</h3><ul style="margin:0"><li>Native list</li></ul></div>');
+  assert.deepEqual(s.nodes.map((n) => [n.kind, n.reason ?? null]), [["box", null], ["raster", "background image"], ["text", null], ["list", null]]);
+  const [box, picture] = s.nodes;
+  assert.deepEqual([box.fill, box.border.color.hex, box.radius, !!box.shadow], [{ hex: "EEF4F0", alpha: 1 }, "D9E3DB", 8, true]);
+  assert.deepEqual([picture.label, picture.contentsHidden, picture.rect], ["div.kv-card background", true, box.rect]);
+  // Element-level reasons still picture the whole element, contents included.
+  const blurred = await extractHtml(browser, `<div style="filter:blur(1px);background:url(&quot;${pattern}&quot;)"><p>Inside</p></div>`);
+  assert.deepEqual(blurred.nodes.map((n) => [n.kind, n.reason]), [["raster", "CSS filter"]]);
+  const layered = await extractHtml(browser, '<div style="width:100px;height:50px;background:linear-gradient(#f00, #00f), linear-gradient(#0f0, #000)">Text</div>');
+  assert.deepEqual(layered.nodes.map((n) => [n.kind, n.reason ?? textOf(n)]), [["raster", "background layers"], ["text", "Text"]]);
 });
 
 test("hidden, transparent and zero-size elements are skipped; opacity multiplies down; one-sided borders are sides", opts, async () => {

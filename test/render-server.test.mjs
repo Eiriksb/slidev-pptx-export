@@ -1,14 +1,25 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { slidevCli, startDeckServer } from "../src/render/server.mjs";
 import { loadChromium } from "../src/render/browser.mjs";
 
+// Temporary directories, removed when the tests are done.
+const tempDirs = [];
+after(() => {
+  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+});
+const tempDir = (prefix) => {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+};
+
 // A throwaway deck whose node_modules/@slidev/cli is a tiny fake CLI script (null = none).
 function fakeDeck(cliSource, { hoisted = false } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "pptx-render-"));
+  const root = tempDir("pptx-render-");
   const deckDir = hoisted ? join(root, "decks", "talk") : root;
   mkdirSync(deckDir, { recursive: true });
   writeFileSync(join(deckDir, "slides.md"), "# Hi\n");
@@ -98,7 +109,7 @@ test("loadChromium explains how to install Playwright when it's missing", async 
 });
 
 test("loadChromium takes playwright-chromium from the deck folder first", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pptx-pw-"));
+  const dir = tempDir("pptx-pw-");
   const file = join(dir, "fake-playwright.mjs");
   writeFileSync(file, "export const chromium = { name: 'fake' };");
   const seen = [];

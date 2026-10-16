@@ -5,7 +5,8 @@
 // generic defaults (plain colors/fonts, no logo, no chart resolvers) if none is found.
 //
 // --render runs the deck with its own Slidev in headless Chromium and converts what is actually
-// drawn (custom CSS, HTML and Vue components included). Needs playwright-chromium installed.
+// drawn (custom CSS, HTML and Vue components included). Needs `playwright-chromium` or
+// `playwright` installed (in the deck folder or next to this package), with its Chromium.
 
 import { existsSync } from "node:fs";
 import { resolve, dirname, basename, extname, isAbsolute } from "node:path";

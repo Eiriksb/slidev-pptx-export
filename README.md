@@ -85,12 +85,20 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
   charts PowerPoint can draw faithfully are native: for example, other chart types, mixed
   types, a log or second value axis, stack groups, a chart title, per-bar or scripted colors,
   and rotated or translucent charts are exported as pictures. A `chartResolvers` entry
-  returning `kind: "barchart"` for the component still wins.
+  returning `kind: "barchart"` for the component still wins, also over a chart that would
+  have been a picture.
 - Images become native pictures; one that didn't load is skipped, with a notice. SVG images
   stay vector in PowerPoint 2016+ (with a PNG fallback elsewhere) when their box has the
-  SVG's aspect, and are pictures otherwise. A `url()` background is native only when it is
-  centred cover/contain or 100% 100%, and a radial gradient whose shape differs a lot from
-  its box becomes a picture.
+  SVG's aspect, and are pictures otherwise. An image with rounded corners (its own, or those
+  of a box that clips it) is a picture, since PowerPoint pictures are square.
+- A `url()` background is native only when it is centred cover/contain or 100% 100%. Any
+  other background PowerPoint can't draw - an SVG, tiled or off-centre image, a translucent
+  one, layered backgrounds, a repeating gradient, a radial gradient whose shape differs a lot
+  from its box - becomes a picture behind the element's contents, which stay native text
+  and shapes.
+- `global-top.vue` and `global-bottom.vue` are exported with every slide (the bottom layer
+  only where the slide lets it show through), so a shared footer usually lands on the slide
+  master. A slide's `zoom:` is honoured: its text and shapes keep their zoomed size.
 - Elements drawn identically on every slide, like a footer logo, go on the slide master once,
   unless slide content covers them. A picture there is reported as "slide master".
 - Anything PowerPoint can't express natively (blur and other CSS filters, masks, inline SVG
@@ -101,17 +109,20 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
   says they are ignored when the config sets them. `render: { timeout }` sets the per-slide
   wait (default 15000 ms). The first slide also waits for Slidev's cold start (Vite
   dependency optimisation), so slow machines or heavy decks may need a larger timeout.
-- A slide Slidev can't load or render falls back to the markdown export, with a warning. When
-  Slidev can't start (for example its theme isn't installed), Chromium can't launch or the
-  Slidev version isn't supported, the export stops with an error instead.
+- A slide Slidev can't load or render falls back to the markdown export, with a warning. A
+  slide imported from another file (`src:`) has no markdown fallback (the default mode
+  doesn't read imported files), so it is left blank, with a warning. When Slidev can't start
+  (for example its theme isn't installed), Chromium can't launch or the Slidev version isn't
+  supported, the export stops with an error instead; Chromium is launched before Slidev
+  starts, so a missing browser fails fast.
 - Limits: each slide is captured in its final `v-click` state, with every fragment shown.
   Animations and transitions, hyperlinks (link text keeps its styling), Slidev drawings and
   font embedding (viewers need the fonts) aren't carried over.
 
 Render mode needs the deck's dependencies installed (`npm install` in the deck folder), Node
-20.12 or newer (what Slidev 52 requires) and Playwright's Chromium, from `playwright-chromium`
-or `playwright`, found in the deck folder first and then next to this package. It takes
-roughly 10–30 seconds per deck.
+20.12 or newer (what Slidev 52 requires) and Playwright's Chromium. It looks for
+`playwright-chromium`, then `playwright`, each first in the deck folder and then next to this
+package. It takes roughly 10–30 seconds per deck.
 
 ## Config
 

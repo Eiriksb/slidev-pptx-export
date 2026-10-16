@@ -4,8 +4,9 @@
 // isn't installed. Usage: node scripts/render.mjs [--render] [path/to/slides.md ...]
 // Default decks: the kitchen-sink fixture, plus ../innotek-SlideDevBase if it's checked out.
 // --render exports in render mode and adds a visual check: each slide's LibreOffice render is
-// compared with Slidev's own screenshot of it. A slide passes only when both scores clear their
-// thresholds (see compare.mjs), and every slide of the deck has to be compared.
+// compared with Slidev's own screenshot of it. A slide passes only when both scores (computed by
+// src/render/compare.mjs) clear their thresholds (VISUAL_THRESHOLD and INK_THRESHOLD below), and
+// every slide of the deck has to be compared.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";

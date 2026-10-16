@@ -77,12 +77,16 @@ SlideSpec = {
     title?: Para[],
     subtitle?: Para[],          // "title" layout only
     body?: Para[],              // text-only bodies (hybrid rule)
-    // Optional slide-level position overrides, used only by "centered":
+    // Optional slide-level position overrides, used by "centered" (and titleBox by render mode):
     titleBox?: Box, bodyBox?: Box,
     bodyFontScale?: number,     // 0..1, written as <a:normAutofit fontScale>
+    // Render mode only (added 2026-10-15): the title placeholder at its measured DOM position.
+    titleBody?: { inset?: number, anchor?: "t", autofit?: "none", wrap?: false }, // its bodyPr
+    titleZ?: number,            // the title is drawn after this many shapes (DOM order), not first
   },
   shapes: Shape[],              // drawn after placeholders, in order
   notes?: string,
+  background?: { color, alpha? } | { gradient } | { image: { data, ext } }, // render mode: p:bg
 }
 Box   = { x, y, w, h }
 Shape =
@@ -108,6 +112,20 @@ ChartSpec = { type: "bar"|"column", categories: string[],
 
 `layout.mjs` resolves config color keys to `Color` via `toColor()`: a value equal to one of the
 theme-mapped config colors becomes its slot name; anything else becomes `#hex`.
+
+**Render-mode extensions (2026-10-15).** Render mode (`src/render/scene.mjs`, see
+`2026-10-15-render-mode-design.md`) builds the same SlideSpecs with a few more optional fields,
+all ignored when absent so the static export's output is unchanged: the slide `background` and
+the title's `titleBox` / `titleBody` / `titleZ` above; on text shapes `fill` as a gradient
+(`{ type: "linear"|"radial", angle | cx, cy, stops: [{ pos, color, alpha? }] }`), `fillAlpha`,
+`line.alpha`, a parameterized `shadow` (`{ blur, dist, dir, color, alpha? }` instead of `true`),
+`rot` and `wrap: false`; on paragraphs `lineSpacing` (pt), `bulletColor`, `marL` / `indent`;
+on runs `typeface`, `alpha`, `spacing`, `u`, `strike` and `highlight`; on images `data` / `ext`
+(bytes instead of a path), `crop` (`srcRect`), `line`, `shadow`, `rot` and `svg` (an
+`asvg:svgBlip` next to the PNG); `variant: "plain"` tables whose cells carry their own fill,
+per-side borders, margins, anchor and `gridSpan` / `rowSpan` / merge markers; chart
+`reverseCategories`, `numFmt`, `gridColor` and series `alpha`; and `deckOpts.masterShapes`,
+shapes drawn once on the slide master.
 
 ### Writer modules (`src/ooxml/`)
 

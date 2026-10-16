@@ -7,7 +7,8 @@
 //   inkOverlap  the overlap of what is drawn on the background. Per image, ink is each pixel's
 //               distance from that image's median gray; the score is sum(min) / sum(max) of the two
 //               inks (1 = same marks in the same places, 0 = none shared; two blank images are 1).
-//               Content missing or shifted by a few pixels drops it sharply.
+//               It catches a blank slide, the wrong slide, missing content and large drift; at
+//               160x90 a shift of a few pixels - even 20px sideways - barely registers.
 
 // Both scores for one pair of PNG buffers: { similarity, ink }.
 export async function compareImages(page, a, b) {

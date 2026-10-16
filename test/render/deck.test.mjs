@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, mkdtempSync } from "node:fs";
+import { existsSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -42,12 +42,29 @@ test("captures every slide of the innotek deck: scenes, notes, image bytes and s
   }
 });
 
+// Every export goes to a temporary directory of its own, removed when the tests are done.
+const tempDirs = [];
+after(() => {
+  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+});
+
+// The export's console warnings come back as `warnings` instead of going to the test output.
 export async function exportInnotek(name = "innotek-render.pptx", overrides = {}) {
   const config = { ...(await import(pathToFileURL(join(dirname(INNOTEK), "pptx.config.mjs")).href)).default, ...overrides };
-  const outputPath = join(mkdtempSync(join(tmpdir(), "pptx-render-")), name);
-  const result = await convert({ inputPath: INNOTEK, outputPath, config, configDir: dirname(INNOTEK), render: true });
+  const dir = mkdtempSync(join(tmpdir(), "pptx-render-"));
+  tempDirs.push(dir);
+  const outputPath = join(dir, name);
+  const warnings = [];
+  const orig = console.warn;
+  console.warn = (...a) => warnings.push(a.join(" "));
+  let result;
+  try {
+    result = await convert({ inputPath: INNOTEK, outputPath, config, configDir: dirname(INNOTEK), render: true });
+  } finally {
+    console.warn = orig;
+  }
   const buffer = readFileSync(outputPath);
-  return { result, buffer, z: await unzip(buffer) };
+  return { result, buffer, z: await unzip(buffer), warnings };
 }
 
 test("exports the innotek deck with --render: lint-clean, title placeholders, native cards and eyebrow", deckOpts, async () => {
@@ -94,13 +111,6 @@ test("the footer logo is drawn once, on the slide master", deckOpts, async () =>
 });
 
 test("the innotek deck needs no picture or markdown fallbacks", deckOpts, async () => {
-  const notices = [];
-  const orig = console.warn;
-  console.warn = (...a) => notices.push(a.join(" "));
-  try {
-    await exportInnotek("innotek-no-pictures.pptx");
-  } finally {
-    console.warn = orig;
-  }
-  assert.deepEqual(notices.filter((n) => / exported as a picture | could not be rendered /.test(n)), []);
+  const { warnings } = await exportInnotek("innotek-no-pictures.pptx");
+  assert.deepEqual(warnings.filter((n) => / exported as a picture | could not be rendered | skipped /.test(n)), []);
 });

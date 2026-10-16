@@ -32,6 +32,14 @@ test("a card becomes a rounded box with fill and border; its heading and paragra
   assert.equal(code.font, "monospace");
 });
 
+test("a translucent inline highlight is the color the page shows: composited over the background beneath it", opts, async () => {
+  const s = await extractHtml(browser,
+    '<p style="margin:0;font:16px Arial">On white <code style="background:rgba(26, 131, 59, 0.12)">tinted</code></p>' +
+      '<p style="margin:0;font:16px Arial;background:#000;color:#fff">On black <code style="background:rgba(255, 255, 255, 0.5)">gray</code> <b style="background:#ff0000">red</b></p>');
+  const highlights = s.nodes.filter((n) => n.kind === "text").flatMap((n) => n.runs.filter((r) => r.highlight).map((r) => [r.text, r.highlight]));
+  assert.deepEqual(highlights, [["tinted", { hex: "E4F0E7", alpha: 1 }], ["gray", { hex: "808080", alpha: 1 }], ["red", { hex: "FF0000", alpha: 1 }]]);
+});
+
 test("an eyebrow keeps uppercase, letter spacing and weight in its run", opts, async () => {
   const s = await extractHtml(browser, '<div style="font:800 12px Arial;letter-spacing:1.68px;text-transform:uppercase;color:#1a833b">Overview</div>');
   assert.deepEqual(s.nodes.map((n) => n.kind), ["text"]);
@@ -550,6 +558,19 @@ test("a canvas that becomes a picture still names the Vue components around it, 
   ]);
   const [pie] = s.nodes;
   assert.deepEqual(pie.chartRect, { x: pie.rect.x + 12, y: pie.rect.y + 12, w: pie.rect.w - 24, h: pie.rect.h - 24 }, "the chart goes in the canvas's content box");
+});
+
+test("a rounded image is a picture: its own corners, or a rounded box that clips it where it reaches into a corner", opts, async () => {
+  const img = (style) => `<img src="${PNG}" alt="Photo" style="display:block;width:120px;height:80px;${style}">`;
+  const kind = async (html) => (await extractHtml(browser, html)).nodes.filter((n) => n.alt === "Photo").map((n) => [n.kind, n.reason ?? null]);
+  assert.deepEqual(await kind(img("border-radius:12px")), [["raster", "rounded image"]]);
+  assert.deepEqual(await kind(img("border-bottom-right-radius:50%")), [["raster", "rounded image"]]);
+  assert.deepEqual(await kind(img("")), [["image", null]]);
+  const box = (style, inner) => `<div style="width:200px;height:120px;border-radius:16px;${style}">${inner}</div>`;
+  assert.deepEqual(await kind(box("overflow:hidden", img(""))), [["raster", "rounded image"]], "the image sits in the box's top-left corner");
+  assert.deepEqual(await kind(box("overflow:hidden;padding:20px;box-sizing:border-box", img(""))), [["image", null]], "padding keeps it clear of the corners");
+  assert.deepEqual(await kind(box("", img(""))), [["image", null]], "a box that doesn't clip");
+  assert.deepEqual(await kind(box("overflow:hidden;border-radius:0", img(""))), [["image", null]], "a square box");
 });
 
 test("an SVG image is an image node, not a picture of an element", opts, async () => {

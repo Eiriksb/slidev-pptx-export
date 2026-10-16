@@ -505,6 +505,48 @@
       return box.w > 0 && box.h > 0 && Math.abs(box.w / box.h / (el.naturalWidth / el.naturalHeight) - 1) <= 0.01;
     }
 
+    // An element's corner radii in canvas px, [top-left, top-right, bottom-right, bottom-left] as
+    // [rx, ry] each (percentages of the border box `rc`).
+    function radiiOf(cs, rc) {
+      return ["TopLeft", "TopRight", "BottomRight", "BottomLeft"].map((c) => {
+        const [h, v = h] = String(cs[`border${c}Radius`] || "0px").split(/\s+/);
+        const len = (t, full) => (t.endsWith("%") ? (parseFloat(t) / 100) * full : px(t));
+        return [len(h, rc.w), len(v, rc.h)];
+      });
+    }
+
+    // Whether an image's corners are cut round - by its own border radius, or by a rounded
+    // ancestor that clips its contents (overflow other than visible) where the image reaches into
+    // one of its corners. DrawingML pictures are square, so those images are pictures of the page.
+    function roundedImage(el, cs, rc) {
+      if (radiiOf(cs, rc).some(([rx, ry]) => rx > 0 && ry > 0)) return true;
+      for (let e = el.parentElement; e && e !== pageEl && e !== host; e = e.parentElement) {
+        const ecs = getComputedStyle(e);
+        if (ecs.overflowX === "visible" && ecs.overflowY === "visible") continue;
+        const box = rectOf(e.getBoundingClientRect());
+        // Contents are clipped to the padding box, whose corners are the border radii less the borders.
+        const [bt, br, bb, bl] = ["Top", "Right", "Bottom", "Left"].map((side) => px(ecs[`border${side}Width`]));
+        const pad = { x: box.x + bl, y: box.y + bt, w: box.w - bl - br, h: box.h - bt - bb };
+        const corners = radiiOf(ecs, box);
+        const inner = [[bl, bt], [br, bt], [br, bb], [bl, bb]];
+        for (let i = 0; i < 4; i++) {
+          const rx = corners[i][0] - inner[i][0];
+          const ry = corners[i][1] - inner[i][1];
+          if (!(rx > 0.5 && ry > 0.5)) continue;
+          const right = i === 1 || i === 2;
+          const bottom = i === 2 || i === 3;
+          // The corner's ellipse center, and the image's point nearest the corner.
+          const cx = right ? pad.x + pad.w - rx : pad.x + rx;
+          const cy = bottom ? pad.y + pad.h - ry : pad.y + ry;
+          const nx = right ? Math.min(rc.x + rc.w, pad.x + pad.w) : Math.max(rc.x, pad.x);
+          const ny = bottom ? Math.min(rc.y + rc.h, pad.y + pad.h) : Math.max(rc.y, pad.y);
+          const inCorner = (right ? nx > cx : nx < cx) && (bottom ? ny > cy : ny < cy);
+          if (inCorner && ((nx - cx) / rx) ** 2 + ((ny - cy) / ry) ** 2 > 1.02) return true;
+        }
+      }
+      return false;
+    }
+
     function rasterReason(el, cs, tag, op, rc) {
       // An inline SVG with nothing in it (Slidev's empty drawing layer) draws only its CSS box.
       if (tag === "svg" && !el.firstElementChild) return null;
@@ -514,6 +556,7 @@
         if (!fmt) return "image format";
         if (op < 0.999) return "image opacity";
         if (fmt === "svg" && el.complete && el.naturalWidth && !svgFits(el, cs, rc)) return "SVG image fit";
+        if (el.complete && el.naturalWidth && roundedImage(el, cs, rc)) return "rounded image";
       }
       // Code is drawn as unwrapped text over its panel, so a block that scrolls inside the panel
       // (the browser clips it) or wraps (the browser breaks lines the text box won't) is a picture.
@@ -565,6 +608,14 @@
       return d;
     }
 
+    // An inline element's background as a run highlight, which has no alpha: a translucent one is
+    // the color the page shows, composited over the background beneath it (white past the root).
+    function highlightOf(el, cs) {
+      const c = parseColor(cs.backgroundColor);
+      if (!c || c.alpha >= 0.999) return c;
+      return composite(c, colorBehind(el, true));
+    }
+
     // Text runs from inline content. Elements that aren't inline flow (images, inline-blocks)
     // are collected in `deferred` and become nodes of their own.
     function collectRuns(list, deco, highlight, runs, deferred) {
@@ -589,7 +640,7 @@
           deferred.push(n);
           continue;
         }
-        collectRuns(n.childNodes, mergeDeco(deco, ccs), parseColor(ccs.backgroundColor) || highlight, runs, deferred);
+        collectRuns(n.childNodes, mergeDeco(deco, ccs), highlightOf(n, ccs) || highlight, runs, deferred);
       }
     }
 

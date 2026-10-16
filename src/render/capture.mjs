@@ -58,9 +58,18 @@ async function captureSlide(page, baseUrl, s, canvas, screenshots) {
   const screenshot = screenshots ? await page.locator(sel).screenshot({ animations: "disabled" }) : null;
   await page.addScriptTag({ content: EXTRACT });
   const scene = await page.evaluate(({ pageSel, size }) => window.__pptxExtract(document.querySelector(pageSel), size), { pageSel: sel, size: canvas });
-  for (const node of scene.nodes) {
-    if (node.kind === "image") await loadImage(page, node);
-    else if (node.kind === "raster") node.png = await elementShot(page, node.id);
+  // A picture shows what is behind its element, never what is drawn above it: the slide's
+  // pictures are taken without the global top layer over them, the global bottom layer's without
+  // the slide either. Those are exported on their own, above the picture.
+  for (const [layer, above] of [["bottom", [sel, TOP_LAYER]], [undefined, [TOP_LAYER]], ["top", []]]) {
+    const own = scene.nodes.filter((n) => n.layer === layer && (n.kind === "image" || n.kind === "raster"));
+    if (!own.length) continue;
+    const shown = await hide(page, above);
+    for (const node of own) {
+      if (node.kind === "image") await loadImage(page, node);
+      else node.png = await elementShot(page, node.id);
+    }
+    await shown();
   }
   // Last: it hides the slide's contents.
   if (scene.background.raster) scene.background.png = await backgroundShot(page, sel);
@@ -175,6 +184,16 @@ async function loadImage(page, node) {
   }
 }
 
+const TOP_LAYER = '[data-pptx-layer="top"]';
+
+// Hides what `selectors` match (opacity, so nothing inside can show through) until the returned
+// function is called.
+async function hide(page, selectors) {
+  if (!selectors.length) return async () => {};
+  const style = await page.addStyleTag({ content: `${selectors.join(",")}{opacity:0!important}` });
+  return () => style.evaluate((el) => el.remove());
+}
+
 async function elementShot(page, id) {
   try {
     return await page.locator(`[data-pptx-node="${id}"]`).screenshot({ animations: "disabled" });
@@ -183,12 +202,14 @@ async function elementShot(page, id) {
   }
 }
 
-// The slide's background alone: everything inside the layout hidden, then one screenshot.
+// The slide's background alone: everything inside the layout and the global layers hidden, then
+// one screenshot.
 async function backgroundShot(page, sel) {
   await page.evaluate((pageSel) => {
     const pageEl = document.querySelector(pageSel);
     const root = pageEl.querySelector(".slidev-layout") || pageEl.firstElementChild || pageEl;
     for (const c of root.children) c.style.setProperty("visibility", "hidden", "important");
   }, sel);
+  await hide(page, ["[data-pptx-layer]"]);
   return page.locator(sel).screenshot({ animations: "disabled" });
 }

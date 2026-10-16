@@ -186,3 +186,44 @@ test("Vite's error overlay (one slide's compile error shows on every page) stays
     assert.ok(dark < 0.01, `${what}: ${(dark * 100).toFixed(1)}% black`);
   }
 });
+
+test("global layers beside the slideshow are on every slide, and stay out of the background picture", opts, async (t) => {
+  // Slidev's DOM: #slide-content > [global bottom, #slideshow > every page (only the current one shown), global top].
+  // The slides paint no background of their own, so the global bottom layer shows through them.
+  const pages = [1, 2].map((n) => page(n, `<p style="margin:0;font:20px Arial">Slide ${n}</p>`).replace('position:relative', 'position:absolute;inset:0')).join("");
+  const html =
+    `<!doctype html><html><head><style>body{margin:0}</style>${slidevData(2)}</head><body>` +
+    '<div id="slide-content" class="slidev-slide-content" style="position:relative;width:980px;height:552px;overflow:hidden;background:repeating-linear-gradient(45deg, #ffcc00 0 10px, #ffffff 10px 20px)">' +
+    '<div class="band" style="position:absolute;left:0;top:0;width:980px;height:40px;background:#000"></div>' +
+    `<div id="slideshow" style="height:100%">${pages}</div>` +
+    '<div class="footer" style="position:absolute;right:24px;bottom:16px;width:300px;height:60px;padding:4px;background:#000;color:#fff;font:14px Arial">Global footer</div></div>' +
+    "<script>const n = location.pathname.slice(1); for (const p of document.querySelectorAll('.slidev-page')) p.style.display = p.classList.contains('slidev-page-' + n) ? '' : 'none';</script>" +
+    "</body></html>";
+  const { slides } = await captureDeck({ baseUrl: await serve(t, html), chromium, timeout: 15000 });
+  assert.equal(slides.length, 2);
+  for (const [i, s] of slides.entries()) {
+    assert.deepEqual(s.nodes.map((n) => [n.kind, n.kind === "text" ? textOf(n) : n.fill.hex]), [["box", "000000"], ["text", `Slide ${i + 1}`], ["box", "000000"], ["text", "Global footer"]], `slide ${i + 1}`);
+    const dark = await darkShare(s.background.png);
+    assert.ok(dark < 0.01, `slide ${i + 1} background: ${(dark * 100).toFixed(1)}% black`);
+  }
+});
+
+test("a picture never shows what is drawn above it: the slide is hidden for the global bottom layer's, the global top layer for the slide's", opts, async (t) => {
+  const yellow = (style) => `<svg width="200" height="100" style="position:absolute;${style}"><rect width="200" height="100" fill="#ffcc00"/></svg>`;
+  const black = (style) => `<div style="position:absolute;${style};width:120px;height:60px;background:#000"></div>`;
+  const html =
+    `<!doctype html><html><head><style>body{margin:0}</style>${slidevData(1)}</head><body>` +
+    '<div id="slide-content" class="slidev-slide-content" style="position:relative;width:980px;height:552px;overflow:hidden;background:#fff">' +
+    yellow("left:0;top:0") +
+    '<div id="slideshow" style="height:100%"><div class="slidev-page slidev-page-1" style="position:absolute;inset:0">' +
+    `<div class="slidev-layout default" style="width:100%;height:100%">${black("left:0;top:0")}${yellow("right:0;bottom:0")}</div></div></div>` +
+    `${black("right:0;bottom:0")}</div></body></html>`;
+  const { slides: [slide] } = await captureDeck({ baseUrl: await serve(t, html), chromium, timeout: 15000, screenshots: true });
+  const pictures = slide.nodes.filter((n) => n.kind === "raster");
+  assert.deepEqual(pictures.map((n) => n.layer), ["bottom", undefined]);
+  for (const n of pictures) {
+    const dark = await darkShare(n.png);
+    assert.ok(dark < 0.01, `${n.layer ?? "page"} picture: ${(dark * 100).toFixed(1)}% black`);
+  }
+  assert.ok((await darkShare(slide.screenshot)) > 0.02, "Slidev's own screenshot shows everything");
+});

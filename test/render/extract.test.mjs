@@ -544,3 +544,68 @@ test("a broken SVG image is skipped as missing, like any other image that didn't
   const s = await extractHtml(browser, `<img src="${bad}" alt="Logo" style="display:block;width:80px;height:40px">`);
   assert.deepEqual(s.nodes.map((n) => [n.kind, n.src === bad]), [["missing", true]]);
 });
+
+test("global layers (global-bottom.vue / global-top.vue) are extracted in DOM order, in the page's coordinates; Slidev's own UI is not", opts, async () => {
+  const s = await extractHtml(browser, '<p style="margin:0;font:20px Arial">Page text</p>', {
+    globalBottom: '<div style="position:absolute;left:0;top:0;width:980px;height:8px;background:#1a833b"></div>',
+    globalTop: '<div style="position:absolute;right:24px;bottom:16px;font:12px Arial">Global footer</div><svg class="w-full h-full absolute top-0" style="position:absolute;top:0;left:0;width:100%;height:100%"></svg><svg class="drawn" width="40" height="40" style="position:absolute;left:0;top:0"><rect width="40" height="40"/></svg>',
+    setup: () => {
+      // The drawing layer is a component of @slidev/client.
+      document.querySelector("svg.drawn").__vueParentComponent = { type: { __file: "/deck/node_modules/@slidev/client/internals/DrawingLayer.vue" } };
+    },
+  });
+  assert.deepEqual(s.nodes.map((n) => [n.kind, n.kind === "text" ? textOf(n) : n.fill.hex]), [["box", "1A833B"], ["text", "Page text"], ["text", "Global footer"]]);
+  assert.deepEqual(s.nodes[0].rect, { x: 0, y: 0, w: 980, h: 8 });
+  const footer = s.nodes[2];
+  assert.ok(Math.abs(footer.rect.x + footer.rect.w - 956) < 1 && Math.abs(footer.rect.y + footer.rect.h - 536) < 2, JSON.stringify(footer.rect));
+  assert.equal(footer.role, "body");
+  const plain = await extractHtml(browser, '<p style="margin:0;font:20px Arial">Page text</p>');
+  assert.deepEqual(plain.nodes.map((n) => n.kind), ["text"]);
+});
+
+test("the global bottom layer is left out where the page paints over it: an opaque color or picture, not a fading gradient", opts, async () => {
+  const band = '<div style="position:absolute;left:0;top:0;width:980px;height:8px;background:#1a833b"></div>';
+  const kinds = async (options) => (await extractHtml(browser, "<p>x</p>", { globalBottom: band, ...options })).nodes.map((n) => n.kind);
+  assert.deepEqual(await kinds({ layoutStyle: "background:#ffffff" }), ["text"]);
+  assert.deepEqual(await kinds({ pageStyle: "background:#ffffff" }), ["text"]);
+  assert.deepEqual(await kinds({ layoutStyle: `background:url(${PNG}) center / cover` }), ["text"]);
+  assert.deepEqual(await kinds({ layoutStyle: "background:rgba(255, 255, 255, 0.5)" }), ["box", "text"]);
+  assert.deepEqual(await kinds({ layoutStyle: "background:linear-gradient(#ffffff, transparent)" }), ["box", "text"]);
+  assert.deepEqual(await kinds({ contentStyle: "background:#ffffff" }), ["box", "text"], "Slidev's own background is beneath the layer");
+});
+
+// Slidev's `zoom:` frontmatter: the page is 1/zoom as large and scaled down with the `scale` property.
+const ZOOMED = "width:1960px;height:1104px;scale:0.5;transform-origin:top left";
+
+test("a zoomed slide (zoom: 0.5) is measured in canvas px: fonts, line height, spacing, padding, borders and radii scale with the rects", opts, async () => {
+  const card = (font, lh, pad, border, radius, spacing) =>
+    `<div style="width:fit-content;padding:${pad}px;border:${border}px solid #1a833b;border-radius:${radius}px;background:#eef4f0"><p style="margin:0;font:${font}px/${lh}px Arial;letter-spacing:${spacing}px">Zoomed card</p></div>`;
+  const zoomed = await extractHtml(browser, card(20, 30, 10, 2, 8, 2), { pageStyle: ZOOMED, globalTop: '<div style="position:absolute;left:10px;top:500px;font:12px Arial">Global</div>' });
+  const plain = await extractHtml(browser, card(10, 15, 5, 1, 4, 1), { layoutStyle: "padding:20px" });
+  const pick = (s) => {
+    const box = s.nodes.find((n) => n.kind === "box");
+    const text = s.nodes.find((n) => n.kind === "text" && textOf(n) === "Zoomed card");
+    return { box: [box.border.width, box.radius], run: [text.runs[0].size, text.runs[0].spacing], lineHeight: text.lineHeight, boxRect: box.rect, textRect: text.rect };
+  };
+  const z = pick(zoomed);
+  const p = pick(plain);
+  assert.deepEqual([z.box, z.run, z.lineHeight], [p.box, p.run, p.lineHeight]);
+  assert.deepEqual(z.run, [10, 1]);
+  for (const k of ["x", "y", "w", "h"]) {
+    assert.ok(Math.abs(z.boxRect[k] - p.boxRect[k]) < 1, `box ${k}: ${z.boxRect[k]} vs ${p.boxRect[k]}`);
+    assert.ok(Math.abs(z.textRect[k] - p.textRect[k]) < 1.5, `text ${k}: ${z.textRect[k]} vs ${p.textRect[k]}`);
+  }
+  // The global layers sit outside the zoomed page: their text keeps its size.
+  assert.equal(zoomed.nodes.find((n) => n.kind === "text" && textOf(n) === "Global").runs[0].size, 12);
+});
+
+test("the individual rotate, scale and translate properties count like transform", opts, async () => {
+  const s = await extractHtml(browser,
+    '<div style="width:100px;rotate:10deg">Turned</div><div style="width:100px;scale:0.5">Scaled</div><div style="width:100px;translate:30px 5px;margin-top:40px">Moved</div><div style="rotate:x 30deg">Tilted</div>');
+  const [turned, moved] = s.nodes.filter((n) => n.kind === "text");
+  assert.deepEqual([textOf(turned), turned.rotate, turned.rect.w], ["Turned", 10, 100]);
+  assert.deepEqual(s.nodes.filter((n) => n.kind === "raster").map((n) => n.reason), ["transform", "transform"]);
+  assert.equal(textOf(moved), "Moved");
+  assert.ok(moved.rect.x >= 69.5, `moved x ${moved.rect.x}`);
+  assert.equal(moved.rotate, 0);
+});

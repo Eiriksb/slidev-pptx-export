@@ -127,12 +127,15 @@
 
   const NOT_NATIVE = { unsupported: "gradient" };
 
-  // One CSS gradient layer, measured against the element's box (rc) ->
-  //   { gradient: { type: "linear", angle } | { type: "radial", cx, cy, rx, ry }, + stops [{ pos, color }] }
-  // or { unsupported: reason } for repeating, unparseable or unfaithful gradients. A radial
-  // gradient is native only when its ellipse has about the box's aspect (DrawingML stretches the
-  // gradient to the box) and its center is inside the box.
-  function parseGradient(layer, rc) {
+  // One CSS gradient layer, measured against the element's box (rc, canvas px; `unit` canvas px
+  // per CSS px) -> { gradient: { type: "linear", angle } | { type: "radial", cx, cy, rx, ry },
+  // + stops [{ pos, color }] } or { unsupported: reason } for repeating, unparseable or unfaithful
+  // gradients. A radial gradient is native only when its ellipse has about the box's aspect
+  // (DrawingML stretches the gradient to the box) and its center is inside the box.
+  function parseGradient(layer, box, unit = 1) {
+    // The gradient's own lengths are CSS px: measure it in the element's CSS px, and give the
+    // radii back in canvas px.
+    const rc = { w: box.w / unit, h: box.h / unit };
     const m = /^(repeating-)?(linear|radial)-gradient\((.*)\)$/s.exec(layer.trim());
     if (!m || m[1]) return NOT_NATIVE;
     const parts = splitTop(m[3]);
@@ -201,8 +204,8 @@
       if (aspect < 0.7 || aspect > 1.4) return { unsupported: "radial gradient shape" };
       g.cx = r2(fx);
       g.cy = r2(fy);
-      g.rx = r2(rx);
-      g.ry = r2(ry);
+      g.rx = r2(rx * unit);
+      g.ry = r2(ry * unit);
       length = rx;
     }
     if (!(length > 0)) return NOT_NATIVE;
@@ -249,11 +252,28 @@
     return IMAGE_FORMATS[String(ext || "").toLowerCase()] || null;
   }
 
-  // A transform that only rotates (and translates) -> { rotateOnly, rotate }; anything else
-  // (scale, skew, mirror, 3D) -> { rotateOnly: false }; none -> null.
+  // The element's own transform - the `transform` property and the individual `rotate` and
+  // `scale` ones (CSS applies rotate, then scale, then transform; `translate` only moves the box,
+  // which its measured rect already shows). One that only rotates (and translates) ->
+  // { rotateOnly, rotate }; anything else (scale, skew, mirror, 3D) -> { rotateOnly: false };
+  // none -> null.
   function transformOf(cs) {
-    if (!cs.transform || cs.transform === "none") return null;
-    const m = new DOMMatrixReadOnly(cs.transform);
+    const fns = [];
+    // Chromium writes a rotation about z as a bare angle, and any other axis as "x 30deg" or "1 1 0 30deg".
+    const rot = cs.rotate && cs.rotate !== "none" ? cs.rotate.trim().split(/\s+/) : [];
+    if (rot.length === 1) fns.push(`rotate(${rot[0]})`);
+    else if (rot.length === 2) fns.push(`rotate${rot[0].toUpperCase()}(${rot[1]})`);
+    else if (rot.length) fns.push(`rotate3d(${rot.join(", ")})`);
+    const sc = cs.scale && cs.scale !== "none" ? cs.scale.trim().split(/\s+/) : [];
+    if (sc.length) fns.push(`${sc.length === 3 ? "scale3d" : "scale"}(${sc.join(", ")})`);
+    if (cs.transform && cs.transform !== "none") fns.push(cs.transform);
+    if (!fns.length) return null;
+    let m;
+    try {
+      m = new DOMMatrixReadOnly(fns.join(" "));
+    } catch {
+      return { rotateOnly: false };
+    }
     if (!m.is2D) return { rotateOnly: false };
     const sx = Math.hypot(m.a, m.b);
     const sy = Math.hypot(m.c, m.d);
@@ -301,14 +321,15 @@
       sameColor(a.color, b.color) && sameColor(a.highlight, b.highlight);
   }
 
-  function runStyle(cs, deco, highlight) {
+  // `unit`: canvas px per CSS px of the element (see extract's `unit`).
+  function runStyle(cs, deco, highlight, unit) {
     return {
       font: firstFamily(cs.fontFamily),
-      size: r2(parseFloat(cs.fontSize)),
+      size: r2(parseFloat(cs.fontSize) * unit),
       bold: (parseInt(cs.fontWeight, 10) || 400) >= 600,
       italic: cs.fontStyle !== "normal",
       color: parseColor(cs.color),
-      spacing: cs.letterSpacing === "normal" ? 0 : r2(parseFloat(cs.letterSpacing) || 0),
+      spacing: cs.letterSpacing === "normal" ? 0 : r2((parseFloat(cs.letterSpacing) || 0) * unit),
       underline: deco.underline,
       strike: deco.strike,
       highlight: highlight || null,
@@ -352,6 +373,34 @@
     const nodes = [];
     let nextId = 0;
 
+    // Slidev draws global-bottom.vue and global-top.vue beside the slideshow, beneath and above every
+    // slide: #slide-content > [global bottom..., #slideshow > .slidev-page..., global top...]. Its
+    // own overlays there (the drawing layer, drag handles, the presenter's cursor) are its UI.
+    const show = pageEl.closest("#slideshow");
+    const host = show && show.parentElement;
+    const slidevUi = (el) => el.id === "drag-control-container" || /[\\/]@slidev[\\/]client[\\/]internals[\\/]/.test((el.__vueParentComponent && el.__vueParentComponent.type && el.__vueParentComponent.type.__file) || "");
+    const layers = { bottom: [], top: [] };
+    if (host) {
+      let side = "bottom";
+      for (const el of host.children) {
+        if (el === show) side = "top";
+        else if (!slidevUi(el)) layers[side].push(el);
+      }
+    }
+
+    // Canvas px per CSS px, for the lengths read from computed styles (font sizes, line heights,
+    // padding, borders, radii, shadows). A `zoom:` slide is a page 1/zoom as large that Slidev
+    // shrinks with the `scale` property: its rects come back scaled, its computed lengths don't.
+    // Everything outside the page (the global layers, the slide's surroundings) is unzoomed.
+    const unitOf = (el) => {
+      const u = el.getBoundingClientRect().width / el.offsetWidth / scale;
+      return Number.isFinite(u) && u > 0 && Math.abs(u - 1) > 0.001 ? u : 1;
+    };
+    const pageUnit = unitOf(pageEl);
+    const outerUnit = host ? unitOf(host) : 1;
+    let unit = pageUnit;
+    const px = (v) => (parseFloat(v) || 0) * unit;
+
     const rectOf = (r) => ({ x: r2((r.left - origin.left) / scale), y: r2((r.top - origin.top) / scale), w: r2(r.width / scale), h: r2(r.height / scale) });
     const onCanvas = (rc) => rc.w > 0.5 && rc.h > 0.5 && rc.x < canvas.w && rc.y < canvas.h && rc.x + rc.w > 0 && rc.y + rc.h > 0;
     const labelOf = (el) => `${el.localName}${[...el.classList].slice(0, 2).map((c) => `.${c}`).join("")}`;
@@ -362,7 +411,7 @@
     };
 
     function contentBox(el, cs, rc) {
-      const n = (p) => parseFloat(cs[p]) || 0;
+      const n = (p) => px(cs[p]);
       const l = n("borderLeftWidth") + n("paddingLeft");
       const t = n("borderTopWidth") + n("paddingTop");
       const r = n("borderRightWidth") + n("paddingRight");
@@ -373,8 +422,8 @@
     // The element's own box with the rotation taken out (getBoundingClientRect is the rotated hull).
     function unrotatedRect(el, r) {
       const c = rectOf(r);
-      const w = el.offsetWidth;
-      const h = el.offsetHeight;
+      const w = r2(el.offsetWidth * unit);
+      const h = r2(el.offsetHeight * unit);
       return { x: r2(c.x + c.w / 2 - w / 2), y: r2(c.y + c.h / 2 - h / 2), w, h };
     }
 
@@ -385,7 +434,7 @@
         const colorMatch = /(rgba?\([^)]*\)|#[0-9a-f]{3,8}\b)/i.exec(part);
         const color = parseColor(colorMatch ? colorMatch[1] : "rgb(0, 0, 0)");
         if (!color) continue;
-        const lengths = (part.replace(colorMatch ? colorMatch[1] : "", "").match(/-?[\d.]+px/g) || []).map(parseFloat);
+        const lengths = (part.replace(colorMatch ? colorMatch[1] : "", "").match(/-?[\d.]+px/g) || []).map((v) => parseFloat(v) * unit);
         return { x: lengths[0] || 0, y: lengths[1] || 0, blur: lengths[2] || 0, color };
       }
       return null;
@@ -394,7 +443,7 @@
     function decoration(cs, rc) {
       const sides = ["Top", "Right", "Bottom", "Left"]
         .map((s, i) => {
-          const width = parseFloat(cs[`border${s}Width`]) || 0;
+          const width = px(cs[`border${s}Width`]);
           const style = cs[`border${s}Style`];
           const color = width && style !== "none" && style !== "hidden" ? parseColor(cs[`border${s}Color`]) : null;
           return { side: "trbl"[i], width, color };
@@ -402,7 +451,7 @@
         .filter((s) => s.color);
       const uniform = sides.length === 4 && sides.every((s) => s.width === sides[0].width && sameColor(s.color, sides[0].color));
       const rad = cs.borderTopLeftRadius || "0px";
-      const radius = rad.endsWith("%") ? (parseFloat(rad) / 100) * Math.min(rc.w, rc.h) : parseFloat(rad) || 0;
+      const radius = rad.endsWith("%") ? (parseFloat(rad) / 100) * Math.min(rc.w, rc.h) : px(rad);
       return {
         fill: parseColor(cs.backgroundColor),
         border: uniform ? { width: sides[0].width, color: sides[0].color } : null,
@@ -430,7 +479,7 @@
       const size = layerValue(cs.backgroundSize);
       if (/gradient\(/.test(layers[0])) {
         // A gradient sized or tiled by background-size is a pattern, not a fill.
-        return /^(auto|auto auto|100% 100%|cover|contain)$/.test(size) ? parseGradient(layers[0], rc) : NOT_NATIVE;
+        return /^(auto|auto auto|100% 100%|cover|contain)$/.test(size) ? parseGradient(layers[0], rc, unit) : NOT_NATIVE;
       }
       const m = /^url\("?(.*?)"?\)$/.exec(layers[0]);
       if (!m) return { unsupported: "background image" };
@@ -452,11 +501,13 @@
     function svgFits(el, cs, rc) {
       if (!/^(fill|contain|cover)$/.test(cs.objectFit)) return false;
       // A transform turns rc into the rotated hull; the element's own layout size is its box.
-      const box = contentBox(el, cs, transformOf(cs) ? { x: 0, y: 0, w: el.offsetWidth, h: el.offsetHeight } : rc);
+      const box = contentBox(el, cs, transformOf(cs) ? { x: 0, y: 0, w: el.offsetWidth * unit, h: el.offsetHeight * unit } : rc);
       return box.w > 0 && box.h > 0 && Math.abs(box.w / box.h / (el.naturalWidth / el.naturalHeight) - 1) <= 0.01;
     }
 
     function rasterReason(el, cs, tag, op, rc) {
+      // An inline SVG with nothing in it (Slidev's empty drawing layer) draws only its CSS box.
+      if (tag === "svg" && !el.firstElementChild) return null;
       if (RASTER_TAGS[tag]) return RASTER_TAGS[tag];
       if (tag === "img") {
         const fmt = formatOf(el.currentSrc || el.src);
@@ -513,14 +564,14 @@
         }
         if (n.nodeType === Node.TEXT_NODE) {
           const pcs = getComputedStyle(n.parentElement);
-          runs.push({ ...runStyle(pcs, deco, highlight), text: transformText(n.data, pcs) });
+          runs.push({ ...runStyle(pcs, deco, highlight, unit), text: transformText(n.data, pcs) });
           continue;
         }
         if (n.nodeType !== Node.ELEMENT_NODE) continue;
         const ccs = getComputedStyle(n);
         if (ccs.display === "none" || ccs.visibility === "hidden" || parseFloat(ccs.opacity) === 0) continue;
         if (n.localName === "br") {
-          runs.push({ ...runStyle(ccs, deco, highlight), text: "\n", br: true });
+          runs.push({ ...runStyle(ccs, deco, highlight, unit), text: "\n", br: true });
           continue;
         }
         if (!isInlineFlow(n)) {
@@ -585,7 +636,7 @@
 
     function lineHeightOf(cs, m) {
       const lh = parseFloat(cs.lineHeight);
-      return r2(lh > 0 ? lh : m.rect.h / m.lines);
+      return r2(lh > 0 ? lh * unit : m.rect.h / m.lines);
     }
 
     function textNode(el, cs, segment, op, box, rotate) {
@@ -686,13 +737,13 @@
         if (runs.length) {
           const m = measure(segment);
           const lr = rectOf(li.getBoundingClientRect());
-          const lineHeight = m ? lineHeightOf(lcs, m) : r2(parseFloat(lcs.fontSize) * 1.2);
+          const lineHeight = m ? lineHeightOf(lcs, m) : r2(px(lcs.fontSize) * 1.2);
           const top = m ? m.firstTop : lr.y;
           const prev = items[items.length - 1];
           const item = {
             level, marker,
             markerColor: parseColor(getComputedStyle(li, "::marker").color),
-            indent: r2(lr.x + (parseFloat(lcs.paddingLeft) || 0) - box.x),
+            indent: r2(lr.x + px(lcs.paddingLeft) - box.x),
             spaceBefore: prev ? r2(Math.max(0, top - prev.lastTop - lineHeight)) : 0,
             lineHeight, align: textAlign(lcs), runs, lastTop: m ? m.lastTop : lr.y,
           };
@@ -726,7 +777,7 @@
     function cellBorders(cs) {
       const out = {};
       for (const [side, name] of [["t", "Top"], ["r", "Right"], ["b", "Bottom"], ["l", "Left"]]) {
-        const width = parseFloat(cs[`border${name}Width`]) || 0;
+        const width = px(cs[`border${name}Width`]);
         const style = cs[`border${name}Style`];
         const color = width && style !== "none" && style !== "hidden" ? parseColor(cs[`border${name}Color`]) : null;
         if (color) out[side] = { width, color };
@@ -809,7 +860,7 @@
         const cs = getComputedStyle(p.td);
         const { runs, m, blocks } = cellContent(p.td);
         later.push(...blocks);
-        const n = (prop) => parseFloat(cs[prop]) || 0;
+        const n = (prop) => px(cs[prop]);
         const borders = cellBorders(cs);
         if (collapsed) {
           // With collapsed borders a row's rules (Slidev's `tr { border-bottom }`) are drawn along the
@@ -824,7 +875,7 @@
         for (let e = p.td; e && e !== table && !fill; e = e.parentElement) fill = parseColor(getComputedStyle(e).backgroundColor);
         cells[p.r][p.c] = {
           runs, align: textAlign(cs), valign: cs.verticalAlign,
-          lineHeight: m ? lineHeightOf(cs, m) : r2(parseFloat(cs.fontSize) * 1.2),
+          lineHeight: m ? lineHeightOf(cs, m) : r2(px(cs.fontSize) * 1.2),
           fill, borders,
           padding: { t: n("paddingTop"), r: n("paddingRight"), b: n("paddingBottom"), l: n("paddingLeft") },
           colspan: p.cspan, rowspan: p.rspan,
@@ -858,7 +909,7 @@
       for (let n = walker.nextNode(); n; n = walker.nextNode()) {
         const dim = opacityWithin(n.parentElement, pre);
         if (!(dim > 0.001)) continue;
-        const style = runStyle(getComputedStyle(n.parentElement), inheritedDeco(n.parentElement), null);
+        const style = runStyle(getComputedStyle(n.parentElement), inheritedDeco(n.parentElement), null, unit);
         if (style.color && dim < 1) style.color = { ...style.color, alpha: Math.round(style.color.alpha * dim * 1000) / 1000 };
         let offset = 0;
         n.data.split("\n").forEach((part, i) => {
@@ -901,13 +952,13 @@
       const rects = lh > 0 ? null : {};
       const lines = codeLines(pre, cs, rects);
       if (!lines.length) return;
-      let pitch = r2(lh);
+      let pitch = r2(lh * unit);
       if (!(lh > 0)) {
         const rows = Object.keys(rects).map(Number);
         const first = rows[0];
         const last = rows[rows.length - 1];
-        const px = rows.length ? (last > first ? (rects[last].top - rects[first].top) / (last - first) : rects[first].height) : parseFloat(cs.fontSize) * 1.2;
-        pitch = r2(rows.length ? px / scale : px);
+        const measured = rows.length ? (last > first ? (rects[last].top - rects[first].top) / (last - first) : rects[first].height) / scale : null;
+        pitch = r2(measured ?? px(cs.fontSize) * 1.2);
       }
       nodes.push({
         kind: "code", rect: contentBox(pre, cs, box), lines: lines.map((runs) => tidyRuns(runs, { whiteSpace: "pre" })),
@@ -1131,6 +1182,10 @@
         imageNode(el, cs, box, rotate, op);
         return;
       }
+      if (tag === "svg") {
+        boxNode(el, cs, box, rotate, op);
+        return;
+      }
       if (tag === "canvas") {
         chartNode(el, cs, rc, box, rotate, op);
         return;
@@ -1163,6 +1218,7 @@
         const c = parseColor(cs.backgroundColor);
         const raster = (why) => ({ raster: true, reason: why === "gradient" ? "gradient background" : /gradient/.test(why || "") ? why : "background image" });
         if (hasImage(cs)) {
+          unit = pageEl.contains(e) ? pageUnit : outerUnit;
           const bg = backgroundImageOf(cs, rectOf(e.getBoundingClientRect()));
           if (!bg || !bg.gradient) return raster(bg && bg.unsupported);
           const under = c && c.alpha >= 0.999 ? WHITE : colorBehind(e, false);
@@ -1177,7 +1233,37 @@
       return { color: WHITE };
     }
 
+    // A global layer is drawn in the page's coordinates, over (top) or under (bottom) it. Its root
+    // is tagged data-pptx-layer, and its nodes carry `layer`, for the screenshots.
+    function walkLayers(side) {
+      unit = outerUnit;
+      for (const el of layers[side]) {
+        el.setAttribute("data-pptx-layer", side);
+        const first = nodes.length;
+        walk(el, 1);
+        for (let i = first; i < nodes.length; i++) nodes[i].layer = side;
+      }
+      unit = pageUnit;
+    }
+
+    // The global bottom layer shows only where the page lets it through: a page (or its layout)
+    // that paints an opaque color, a picture or an opaque gradient hides it entirely.
+    function pageCoversBottom() {
+      for (let e = layoutRoot; e && e !== pageEl.parentElement; e = e.parentElement) {
+        const cs = getComputedStyle(e);
+        const c = parseColor(cs.backgroundColor);
+        if (c && c.alpha >= 0.999) return true;
+        if (!hasImage(cs)) continue;
+        const bg = backgroundImageOf(cs, rectOf(e.getBoundingClientRect()));
+        if (!(bg && bg.gradient && bg.gradient.stops.some((st) => st.color.alpha < 0.999))) return true;
+      }
+      return false;
+    }
+
+    if (pageCoversBottom()) layers.bottom = [];
+    walkLayers("bottom");
     content(pageEl, getComputedStyle(pageEl), 1, rectOf(origin), 0);
+    walkLayers("top");
     const layout = layoutRoot.classList && layoutRoot.classList.contains("slidev-layout")
       ? [...layoutRoot.classList].find((c) => c !== "slidev-layout") || "default"
       : "default";

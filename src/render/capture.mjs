@@ -88,11 +88,14 @@ async function captureSlide(page, baseUrl, s, canvas, screenshots) {
     const own = scene.nodes.filter((n) => n.layer === layer && (n.kind === "image" || n.kind === "raster"));
     if (!own.length) continue;
     const shown = await hide(page, above);
-    for (const node of own) {
-      if (node.kind === "image") await loadImage(page, node);
-      else node.png = await pictureOf(page, node);
+    try {
+      for (const node of own) {
+        if (node.kind === "image") await loadImage(page, node);
+        else node.png = await pictureOf(page, node);
+      }
+    } finally {
+      await shown();
     }
-    await shown();
   }
   if (scene.background.raster) scene.background.png = await backgroundShot(page, sel);
   return { ...scene, index: s.no, sourceIndex: s.sourceIndex, notes: s.notes, screenshot };

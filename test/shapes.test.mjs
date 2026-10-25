@@ -93,3 +93,10 @@ test("a picture with a corner radius is a rounded rectangle", () => {
   assert.match(xml, /<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 10000"\/><\/a:avLst><\/a:prstGeom>/);
   assert.match(pictureXml({ id: 3, name: "Picture 3", rId: "rId2", box: { x: 1, y: 1, w: 4, h: 2 } }), /<a:prstGeom prst="rect">/);
 });
+
+
+test("a line shape with a dash pattern", () => {
+  const xml = shapeXml({ kind: "text", geometry: "line", x: 1, y: 1, w: 3, h: 0, line: { width: 1.5, color: "#888888", dash: "dash" }, paras: [] }, 4, { lang: "en-US", fonts: {} });
+  assert.match(xml, /<a:prstGeom prst="line">/);
+  assert.match(xml, /<a:prstDash val="dash"\/><\/a:ln>/);
+});

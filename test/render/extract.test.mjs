@@ -753,3 +753,13 @@ test("a rounded image (its own radius, or a rounded frame it fills) is a native 
   assert.deepEqual(imgs.map((n) => n.radius), [12, 10]);
   assert.deepEqual(s.nodes.filter((n) => n.kind === "raster").map((n) => n.reason), ["rounded image"], "one corner only stays a picture of the page");
 });
+
+
+test("dashed and dotted borders keep their pattern: a box's outline, a single side as a line", opts, async () => {
+  const s = await extractHtml(browser,
+    '<div style="width:100px;height:40px;border:2px dashed #888"></div>' +
+    '<div style="width:200px;height:0;border-top:2px dotted #444;margin-top:10px"></div>');
+  const boxes = s.nodes.filter((n) => n.kind === "box");
+  assert.equal(boxes[0].border.dash, "dashed");
+  assert.equal(boxes[1].sides[0].dash, "dotted");
+});

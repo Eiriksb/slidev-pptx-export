@@ -446,15 +446,16 @@
           const width = px(cs[`border${s}Width`]);
           const style = cs[`border${s}Style`];
           const color = width && style !== "none" && style !== "hidden" ? parseColor(cs[`border${s}Color`]) : null;
-          return { side: "trbl"[i], width, color };
+          // dashed and dotted are kept (PowerPoint draws them natively); double, groove … are drawn solid
+          return { side: "trbl"[i], width, color, ...(style === "dashed" || style === "dotted" ? { dash: style } : {}) };
         })
         .filter((s) => s.color);
-      const uniform = sides.length === 4 && sides.every((s) => s.width === sides[0].width && sameColor(s.color, sides[0].color));
+      const uniform = sides.length === 4 && sides.every((s) => s.width === sides[0].width && sameColor(s.color, sides[0].color) && s.dash === sides[0].dash);
       const rad = cs.borderTopLeftRadius || "0px";
       const radius = rad.endsWith("%") ? (parseFloat(rad) / 100) * Math.min(rc.w, rc.h) : px(rad);
       return {
         fill: parseColor(cs.backgroundColor),
-        border: uniform ? { width: sides[0].width, color: sides[0].color } : null,
+        border: uniform ? { width: sides[0].width, color: sides[0].color, ...(sides[0].dash ? { dash: sides[0].dash } : {}) } : null,
         sides: !uniform && sides.length ? sides : null,
         radius: r2(radius),
         shadow: parseShadow(cs.boxShadow),
@@ -750,6 +751,14 @@
         // spacing. A single line has no other line to keep its distance from, so its spacing is its glyphs'
         // own height, from the box's top at the glyphs': the text lands where the page draws it.
         if (!multi && !rotate && lineHeight > rect.h + 1) lineHeight = r2(rect.h);
+        // Several lines with spacing taller than the font: PowerPoint sets each baseline ~80% down its exact
+        // line, the browser ~0.95em below the glyphs' top (where the box starts); the box moves up by the
+        // difference, so the lines land where the page draws them.
+        if (multi && !rotate && runs.length) {
+          const size = Math.max(...runs.map((r) => r.size || 0));
+          const shift = 0.8 * lineHeight - 0.95 * size;
+          if (size > 0 && shift > 0.5) rect = { ...rect, y: r2(rect.y - shift), h: r2(rect.h + shift) };
+        }
         if (onCanvas(rect)) {
           nodes.push({ kind: "text", rect, role: el === titleEl ? "title" : "body", align: textAlign(cs), lineHeight, singleLine: !multi, runs, opacity: op, rotate });
         }
@@ -917,6 +926,12 @@
             if (m) y = m.firstTop + (lineHeightOf(cs, m) - h) / 2;
           }
           x = which === "::before" ? cb.x + px(ps.marginLeft) : cb.x + cb.w - w - px(ps.marginRight);
+          // in a flex row it sits one gap before (after) the text, wherever justify-content puts that
+          if (flexRow) {
+            const m = measure([...el.childNodes]);
+            const gap = px(cs.columnGap) || 0;
+            if (m) x = which === "::before" ? m.rect.x - gap - w - px(ps.marginRight) : m.rect.x + m.rect.w + gap + px(ps.marginLeft);
+          }
         }
         const prect = { x: r2(x), y: r2(y), w: r2(w), h: r2(h) };
         if (!onCanvas(prect)) continue;

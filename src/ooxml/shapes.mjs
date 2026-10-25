@@ -39,7 +39,7 @@ function geometryXml(shape) {
     const adj = Math.round(Math.min(50000, Math.max(0, ((shape.radius ?? 0.1) / side) * 100000)));
     return `<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val ${adj}"/></a:avLst></a:prstGeom>`;
   }
-  return `<a:prstGeom prst="${shape.geometry === "ellipse" ? "ellipse" : "rect"}"><a:avLst/></a:prstGeom>`;
+  return `<a:prstGeom prst="${shape.geometry === "ellipse" || shape.geometry === "line" ? shape.geometry : "rect"}"><a:avLst/></a:prstGeom>`;
 }
 
 function lineXml(line) {

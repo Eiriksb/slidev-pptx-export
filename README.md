@@ -76,8 +76,8 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
 
 - Text keeps its rendered font, size, weight, color, letter spacing and position; slide
   titles still go into title placeholders.
-- Boxes with a background, border, rounded corners, shadow or gradient (cards, callouts)
-  become native shapes; lists get native bullets in their rendered colors; tables become
+- Boxes with a background, border (solid, dashed or dotted; a single dashed side is a native line),
+  rounded corners, shadow or gradient (cards, callouts) become native shapes; lists get native bullets in their rendered colors; tables become
   native tables with each cell's own fill and borders; code blocks keep their syntax colors
   (a block that scrolls or wraps in the page is a picture instead).
 - Chart.js bar charts (e.g. through vue-chartjs) become native, editable charts with the

@@ -96,8 +96,24 @@ function shadowOf(s, u, style, opacity) {
 }
 
 // A border on only some sides (a blockquote's left rule, a heading's underline) is a thin bar.
+// CSS border styles PowerPoint draws as a dash pattern.
+const DASH = { dashed: "dash", dotted: "sysDot" };
+
 function sideBar(rect, side, u, style, opacity) {
   const t = side.width;
+  if (side.dash) {
+    // a dashed or dotted side is a line along the side's middle, in that pattern
+    const half = t / 2;
+    const r =
+      side.side === "l" ? { x: rect.x + half, y: rect.y, w: 0, h: rect.h }
+      : side.side === "r" ? { x: rect.x + rect.w - half, y: rect.y, w: 0, h: rect.h }
+      : side.side === "t" ? { x: rect.x, y: rect.y + half, w: rect.w, h: 0 }
+      : { x: rect.x, y: rect.y + rect.h - half, w: rect.w, h: 0 };
+    const line = { width: u.pt(t), color: colorOf(side.color, style), dash: DASH[side.dash] };
+    const a = alphaOf(side.color, opacity);
+    if (a !== undefined) line.alpha = a;
+    return { kind: "text", ...u.box(r), geometry: "line", line, paras: [] };
+  }
   const r =
     side.side === "l" ? { x: rect.x, y: rect.y, w: t, h: rect.h }
     : side.side === "r" ? { x: rect.x + rect.w - t, y: rect.y, w: t, h: rect.h }
@@ -209,7 +225,7 @@ function boxShapes(node, u, style) {
       if (a !== undefined) shape.fillAlpha = a;
     }
     if (node.border) {
-      shape.line = { width: u.pt(node.border.width), color: colorOf(node.border.color, style) };
+      shape.line = { width: u.pt(node.border.width), color: colorOf(node.border.color, style), ...(node.border.dash ? { dash: DASH[node.border.dash] } : {}) };
       const a = alphaOf(node.border.color, op);
       if (a !== undefined) shape.line.alpha = a;
     }
@@ -246,7 +262,7 @@ function imageShape(node, u, style) {
   if (node.radius > 0) shape.radius = u.inch(node.radius);
   if (node.svg) shape.svg = node.svg;
   const op = node.opacity ?? 1;
-  if (node.border) shape.line = { width: u.pt(node.border.width), color: colorOf(node.border.color, style) };
+  if (node.border) shape.line = { width: u.pt(node.border.width), color: colorOf(node.border.color, style), ...(node.border.dash ? { dash: DASH[node.border.dash] } : {}) };
   if (node.shadow) shape.shadow = shadowOf(node.shadow, u, style, op);
   if (node.rotate) shape.rot = node.rotate;
   return shape;

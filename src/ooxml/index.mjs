@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { extname } from "node:path";
 import { createHash } from "node:crypto";
 import { Package, REL, CT } from "./package.mjs";
+import { esc } from "./xml.mjs";
 import { themeXml } from "./theme.mjs";
 import { layoutDefs, layoutXml, masterXml } from "./master.mjs";
 import { placeholderXml, shapeXml, pictureXml, slideXml, graphicFrameXml, backgroundXml, timingXml } from "./shapes.mjs";
@@ -77,6 +78,52 @@ async function shapeToXml(shape, id, env) {
     default:
       throw new Error(`Unknown shape kind ${JSON.stringify(shape.kind)}`);
   }
+}
+
+const FONT_STYLES = ["regular", "bold", "italic", "boldItalic"];
+
+// Fonts carried in the file: every font name written so far (theme, master, layouts, slides, notes)
+// that `resolve` finds embeddable is renamed to the family it found (a web font's name becomes the
+// installed family's, the name inside the embedded font) and its styles are added as
+// /ppt/fonts/fontN.fntdata. Theme references (+mj-lt ...) and names it can't find are left as they are.
+function embedFonts(pkg, resolve, notice = (msg) => console.warn(msg)) {
+  const names = new Set();
+  for (const [, part] of pkg.parts) {
+    if (typeof part.data !== "string") continue;
+    for (const m of part.data.matchAll(/typeface="([^"+][^"]*)"/g)) names.add(m[1].replace(/&amp;/g, "&"));
+  }
+  const families = new Map(); // family -> rIds per style
+  const rename = new Map();
+  let n = 0;
+  for (const name of [...names].sort()) {
+    const found = resolve(name);
+    if (!found) {
+      notice(`Notice: font "${name}" not embedded: no installed font of that family.`);
+      continue;
+    }
+    for (const note of found.notes) notice(`Notice: font "${name}": ${note}`);
+    if (!found.fonts.regular) continue;
+    if (found.family !== name) rename.set(name, found.family);
+    if (families.has(found.family)) continue;
+    const rIds = {};
+    for (const style of FONT_STYLES) {
+      if (!found.fonts[style]) continue;
+      const part = `/ppt/fonts/font${++n}.fntdata`;
+      pkg.addMedia(part, found.fonts[style]);
+      rIds[style] = pkg.rel(PRES, part, REL.font);
+    }
+    families.set(found.family, rIds);
+  }
+  if (rename.size) {
+    for (const [, part] of pkg.parts) {
+      if (typeof part.data !== "string") continue;
+      part.data = part.data.replace(/typeface="([^"]*)"/g, (m, f) => {
+        const to = rename.get(f.replace(/&amp;/g, "&"));
+        return to ? `typeface="${esc(to)}"` : m;
+      });
+    }
+  }
+  return [...families].map(([typeface, rIds]) => ({ typeface, ...rIds }));
 }
 
 export async function writePptx(slides, deck) {
@@ -177,6 +224,8 @@ export async function writePptx(slides, deck) {
     slideRefs.push({ id: 256 + i, rId: pkg.rel(PRES, part, REL.slide) });
   }
 
+  const embedded = deck.fontResolver ? embedFonts(pkg, deck.fontResolver, deck.onFontNotice) : [];
+
   pkg.rel(PRES, THEME, REL.theme);
   for (const [name, type, rel, xml] of [
     ["/ppt/presProps.xml", CT.presProps, REL.presProps, presPropsXml()],
@@ -187,7 +236,7 @@ export async function writePptx(slides, deck) {
     pkg.rel(PRES, name, rel);
   }
   pkg.addXml(PRES, CT.presentation, presentationXml({
-    masterId, masterRId, notesMasterRId, slides: slideRefs,
+    masterId, masterRId, notesMasterRId, slides: slideRefs, embeddedFonts: embedded,
     width: deck.geometry.width, height: deck.geometry.height,
   }));
   pkg.addXml("/docProps/core.xml", CT.coreProps, coreXml({ title: deck.title, author: deck.author, date: deck.timestamps ? new Date() : null }));

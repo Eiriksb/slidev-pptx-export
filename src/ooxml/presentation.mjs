@@ -11,15 +11,21 @@ const DEFAULT_TEXT_STYLE =
 // PowerPoint only accepts slide sizes between 1" and 56".
 const clampSize = (inches) => Math.min(51206400, Math.max(914400, emuSize(inches)));
 
-export function presentationXml({ masterId, masterRId, notesMasterRId, slides, width, height }) {
+export function presentationXml({ masterId, masterRId, notesMasterRId, slides, width, height, embeddedFonts = [] }) {
+  // embeddedFontLst comes after notesSz; embedTrueTypeFonts tells PowerPoint the file carries them.
+  const fonts = embeddedFonts.length
+    ? `<p:embeddedFontLst>${embeddedFonts.map((f) => `<p:embeddedFont><p:font typeface="${esc(f.typeface)}"/>` +
+      ["regular", "bold", "italic", "boldItalic"].filter((k) => f[k]).map((k) => `<p:${k} r:id="${f[k]}"/>`).join("") +
+      "</p:embeddedFont>").join("")}</p:embeddedFontLst>`
+    : "";
   // Child order per CT_Presentation: sldMasterIdLst, notesMasterIdLst, sldIdLst, sldSz,
   // notesSz, defaultTextStyle. (pptxgenjs writes sldIdLst before notesMasterIdLst.)
   const notes = notesMasterRId ? `<p:notesMasterIdLst><p:notesMasterId r:id="${notesMasterRId}"/></p:notesMasterIdLst>` : "";
   const sldIds = slides.length ? `<p:sldIdLst>${slides.map((s) => `<p:sldId id="${s.id}" r:id="${s.rId}"/>`).join("")}</p:sldIdLst>` : "";
   return (
-    `${XML_DECL}<p:presentation ${NS_PML}><p:sldMasterIdLst><p:sldMasterId id="${masterId}" r:id="${masterRId}"/></p:sldMasterIdLst>` +
+    `${XML_DECL}<p:presentation ${NS_PML}${embeddedFonts.length ? ' embedTrueTypeFonts="1"' : ""}><p:sldMasterIdLst><p:sldMasterId id="${masterId}" r:id="${masterRId}"/></p:sldMasterIdLst>` +
     `${notes}${sldIds}<p:sldSz cx="${clampSize(width)}" cy="${clampSize(height)}"/><p:notesSz cx="6858000" cy="9144000"/>` +
-    `${DEFAULT_TEXT_STYLE}</p:presentation>`
+    `${fonts}${DEFAULT_TEXT_STYLE}</p:presentation>`
   );
 }
 

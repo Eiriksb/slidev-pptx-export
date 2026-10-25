@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Usage: slidev-pptx-export [input.md] [output.pptx] [--config path/to/pptx.config.mjs] [--render]
+// Usage: slidev-pptx-export [input.md] [output.pptx] [--config path/to/pptx.config.mjs] [--render] [--embed-fonts]
 //
 // Without --config, looks for pptx.config.mjs next to input.md, falling back to the built-in
 // generic defaults (plain colors/fonts, no logo, no chart resolvers) if none is found.
@@ -17,6 +17,7 @@ function parseArgs(argv) {
   const positional = [];
   let configPath = null;
   let render = false;
+  let embedFonts = false;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--config") {
       configPath = argv[++i];
@@ -24,11 +25,13 @@ function parseArgs(argv) {
       configPath = argv[i].slice("--config=".length);
     } else if (argv[i] === "--render") {
       render = true;
+    } else if (argv[i] === "--embed-fonts") {
+      embedFonts = true;
     } else {
       positional.push(argv[i]);
     }
   }
-  return { positional, configPath, render };
+  return { positional, configPath, render, embedFonts };
 }
 
 async function loadConfig(configPath, inputPath) {
@@ -43,7 +46,7 @@ async function loadConfig(configPath, inputPath) {
 }
 
 async function main() {
-  const { positional, configPath, render } = parseArgs(process.argv.slice(2));
+  const { positional, configPath, render, embedFonts } = parseArgs(process.argv.slice(2));
   const inputArg = positional[0] || "slides.md";
   const inputPath = resolve(process.cwd(), inputArg);
   if (!existsSync(inputPath)) {
@@ -55,7 +58,7 @@ async function main() {
   const outputArg = positional[1] || `${basename(inputPath, extname(inputPath))}-editable.pptx`;
   const outputPath = resolve(process.cwd(), outputArg);
 
-  const result = await convert({ inputPath, outputPath, config, configDir, render });
+  const result = await convert({ inputPath, outputPath, config, configDir, render, embedFonts });
   console.log(`Wrote ${result.slideCount} slides to ${result.outputPath}`);
   if (result.translatedCharts) console.log(`Translated ${result.translatedCharts} chart(s) into native editable PowerPoint content.`);
   if (result.unresolvedCharts.length) {

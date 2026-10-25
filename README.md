@@ -122,13 +122,40 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
   supported, the export stops with an error instead; Chromium is launched before Slidev
   starts, so a missing browser fails fast.
 - Limits: each slide is captured in its final `v-click` state, with every fragment shown.
-  Animations and transitions (videos excepted, see above), hyperlinks (link text keeps its styling), Slidev drawings and
-  font embedding (viewers need the fonts) aren't carried over.
+  Animations and transitions (videos excepted, see above), hyperlinks (link text keeps its styling) and Slidev
+  drawings aren't carried over; fonts only with `--embed-fonts` (see Fonts).
 
 Render mode needs the deck's dependencies installed (`npm install` in the deck folder), Node
 20.12 or newer (what Slidev 52 requires) and Playwright's Chromium. It looks for
 `playwright-chromium`, then `playwright`, each first in the deck folder and then next to this
 package. It takes roughly 10–30 seconds per deck.
+
+## Fonts (`--embed-fonts`)
+
+```bash
+npx slidev-pptx-export slides.md slides.pptx --render --embed-fonts
+```
+
+The fonts the slides use are carried in the `.pptx`, so it looks the same on a machine without them:
+regular, bold, italic and bold italic of each family, as Embedded OpenType (`/ppt/fonts/*.fntdata`, what
+PowerPoint itself writes), listed in the presentation's `embeddedFontLst`.
+
+- Each font name is looked up with fontconfig (`fc-match`). A web font's name that no installed font has
+  ("Inter Variable", as `@fontsource-variable` calls Inter) falls back to the family without " Variable",
+  and the slides are written with that family's name, the one inside the embedded font.
+- Only TrueType fonts whose licence allows embedding (OS/2 `fsType` not restricted) are embedded;
+  PostScript-outline (CFF) fonts and restricted ones are left out with a notice, as are names no installed
+  font has (like Arial on Linux: a theme default every PowerPoint machine has).
+- Fonts that aren't installed can be given in the config:
+
+```js
+export default {
+  embedFonts: {
+    aliases: { "JetBrains Mono Variable": "JetBrains Mono" },
+    files: { "JetBrains Mono": { regular: "fonts/JetBrainsMono-Regular.ttf", bold: "fonts/JetBrainsMono-Bold.ttf" } },
+  },
+};
+```
 
 ## Config
 

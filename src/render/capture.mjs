@@ -226,15 +226,18 @@ async function videosLoaded(page, sel) {
   }, sel);
 }
 
-// A video's file and its poster for the writer: the poster attribute's picture, else the frame the
-// element shows. A video that can't be fetched, or that PowerPoint can't play, is a picture of its frame.
+// A video's file and its poster for the writer. An autoplaying video is seen playing, not its poster
+// (which may even belong to another of its sources), so its poster is the file's own first frame;
+// otherwise the poster attribute's picture, else the frame the element shows. A video that can't be
+// fetched, or that PowerPoint can't play, is a picture of its frame.
 async function loadVideo(page, node) {
   const ext = VIDEO_FORMATS[(node.src.split(/[?#]/)[0].split(".").pop() || "").toLowerCase()];
   try {
     if (!ext) throw new Error("not a format PowerPoint plays embedded");
     node.data = await fetchBytes(page, node.src);
     node.ext = ext;
-    if (node.poster) {
+    if (node.autoplay) node.posterImage = await firstFrame(page, node.src);
+    if (node.poster && !node.posterImage) {
       try {
         const data = await fetchBytes(page, node.poster);
         const t = imageSize(data).type;
@@ -248,6 +251,37 @@ async function loadVideo(page, node) {
     delete node.data;
     Object.assign(node, { kind: "raster", reason: `video not embedded: ${String(err.message || err).split("\n")[0]}`, png: await elementShot(page, node.id) });
   }
+}
+
+// The first frame of a video file as a JPEG, drawn in the page (same origin, so the canvas can be
+// read); null when it can't be decoded within 8 s.
+async function firstFrame(page, src) {
+  const dataUrl = await page.evaluate(async (url) => {
+    const v = document.createElement("video");
+    v.muted = true;
+    v.preload = "auto";
+    const ready = new Promise((ok, fail) => {
+      v.addEventListener("seeked", ok, { once: true });
+      v.addEventListener("error", fail, { once: true });
+      setTimeout(fail, 8000);
+    });
+    v.addEventListener("loadeddata", () => (v.currentTime = 0.001), { once: true });
+    v.src = url;
+    try {
+      await ready;
+      const c = document.createElement("canvas");
+      c.width = v.videoWidth;
+      c.height = v.videoHeight;
+      c.getContext("2d").drawImage(v, 0, 0);
+      return c.toDataURL("image/jpeg", 0.9);
+    } catch {
+      return null;
+    } finally {
+      v.removeAttribute("src");
+      v.load();
+    }
+  }, src);
+  return dataUrl ? { data: Buffer.from(dataUrl.slice(dataUrl.indexOf(",") + 1), "base64"), ext: "jpg" } : null;
 }
 
 const TOP_LAYER = '[data-pptx-layer="top"]';

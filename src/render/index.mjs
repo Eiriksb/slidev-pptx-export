@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { startDeckServer } from "./server.mjs";
 import { loadChromium } from "./browser.mjs";
 import { captureDeck } from "./capture.mjs";
+import { animateCoveredVideos, coveredVideos, hasFfmpeg } from "./animate.mjs";
 import { sceneToSpec, shapesOf, unitsFor } from "./scene.mjs";
 import { deckStyle, layoutOne, groupedBarChart } from "../layout.mjs";
 
@@ -108,6 +109,23 @@ export function uncoveredSignatures(scenes, repeated) {
   return kept;
 }
 
+// Muted videos with slide content over them become looping animated pictures (see animate.mjs), unless
+// `mode` is "video". Without ffmpeg they stay videos, with a notice.
+function animateVideos(scenes, mode, gif) {
+  if (mode === "video") return;
+  for (const s of scenes) {
+    if (!coveredVideos(s.nodes).length) continue;
+    if (!gif && !hasFfmpeg()) {
+      console.warn(`Notice: slide ${s.index}: a video with content over it stays a video (no ffmpeg to make it an animated picture): LibreOffice draws a playing video above that content.`);
+      continue;
+    }
+    for (const r of animateCoveredVideos(s, gif ? { gif } : {})) {
+      if (r.error) console.warn(`Notice: slide ${s.index}: ${r.label} stays a video (animated picture failed: ${r.error}).`);
+      else console.warn(`Notice: slide ${s.index}: ${r.label} has content over it - exported as a looping animated picture (${(r.bytes / 2 ** 20).toFixed(1)} MB, ${r.width} px wide; --covered-videos video keeps the video).`);
+    }
+  }
+}
+
 // A slide that couldn't be captured, from the markdown: its own slide laid out alone, numbered as
 // the export's slide `no`. Slidev numbers a slide imported with `src:` within its own file, which
 // the static parser doesn't read, so that one (or one with no markdown slide) is left blank.
@@ -162,6 +180,7 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
   const sceneStyle = { geometry: style.geometry, theme: style.theme, fonts: config.fonts };
 
   const rendered = captured.slides.filter((s) => !s.error);
+  animateVideos(rendered, config.render?.coveredVideos ?? "animated", deps.gif);
   // Resolver charts first: a resolved chart is a chart, never a shared picture on the master.
   for (const s of rendered) {
     for (const node of s.nodes) if (node.kind === "chart" || node.kind === "raster") resolveChart(node, config, style);

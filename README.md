@@ -88,11 +88,21 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
   returning `kind: "barchart"` for the component still wins, also over a chart that would
   have been a picture.
 - Videos become native PowerPoint videos: the file (MP4 or MOV) is embedded, cropped or letterboxed as
-  the page draws it (`object-fit`), with its `poster` (else the frame shown) as the picture before it plays.
+  the page draws it (`object-fit`), with its `poster` (else the frame shown) as the picture before it plays
+  (an autoplaying video's own first frame: it is seen playing, and its poster may belong to another source).
   `autoplay` (the attribute, or `<SlidevVideo autoplay>`) starts it with the slide, `loop` repeats it until
   the slide is left and `muted` mutes it, the way PowerPoint writes *Start: Automatically* and *Loop until
   stopped*; without autoplay it plays when clicked. A video that is transformed, filtered, masked, clipped or
   in another format (WebM) stays a picture of its current frame, with a notice.
+- A muted video with slide content over it (a cover's background clip under its title) becomes a looping
+  animated GIF in the same place, by default: LibreOffice Impress plays a video in a window above the whole
+  slide, so the text over it would be gone in its slide show, while a picture keeps its place under the text
+  (PowerPoint, Impress, Keynote and Google Slides all play animated GIFs). It needs `ffmpeg` on the PATH
+  (without it the video stays a video, with a notice). The GIF is up to 20 s long, at most 800 px wide and
+  8 frames a second, and made smaller and choppier until it is 12 MB or less (a camera moving over detailed
+  ground changes every pixel of every frame).
+  `--covered-videos video` (or `render: { coveredVideos: "video" }`) keeps such videos as videos, for decks
+  shown in PowerPoint only.
 - `::before` / `::after` boxes and their text become native shapes and text boxes: a coloured square
   before a label, a numbered circle before a step (`counter()`, `counters()`, `list-item`, `attr()` and
   quoted strings; decimal, alpha and roman numbering), placed by `position: absolute` or as the flow puts

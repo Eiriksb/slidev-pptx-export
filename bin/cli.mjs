@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Usage: slidev-pptx-export [input.md] [output.pptx] [--config path/to/pptx.config.mjs] [--render] [--embed-fonts]
+//                           [--covered-videos animated|video]
 //
 // Without --config, looks for pptx.config.mjs next to input.md, falling back to the built-in
 // generic defaults (plain colors/fonts, no logo, no chart resolvers) if none is found.
@@ -7,6 +8,9 @@
 // --render runs the deck with its own Slidev in headless Chromium and converts what is actually
 // drawn (custom CSS, HTML and Vue components included). Needs `playwright-chromium` or
 // `playwright` installed (in the deck folder or next to this package), with its Chromium.
+//
+// --covered-videos (render mode): a muted video with slide content over it becomes a looping
+// animated picture (animated, the default; needs ffmpeg) or stays a video (video), see README.
 
 import { existsSync } from "node:fs";
 import { resolve, dirname, basename, extname, isAbsolute } from "node:path";
@@ -18,6 +22,7 @@ function parseArgs(argv) {
   let configPath = null;
   let render = false;
   let embedFonts = false;
+  let coveredVideos = null;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--config") {
       configPath = argv[++i];
@@ -27,11 +32,14 @@ function parseArgs(argv) {
       render = true;
     } else if (argv[i] === "--embed-fonts") {
       embedFonts = true;
+    } else if (argv[i] === "--covered-videos" || argv[i].startsWith("--covered-videos=")) {
+      coveredVideos = argv[i].includes("=") ? argv[i].split("=")[1] : argv[++i];
+      if (coveredVideos !== "animated" && coveredVideos !== "video") throw new Error(`--covered-videos takes animated or video, not ${JSON.stringify(coveredVideos)}`);
     } else {
       positional.push(argv[i]);
     }
   }
-  return { positional, configPath, render, embedFonts };
+  return { positional, configPath, render, embedFonts, coveredVideos };
 }
 
 async function loadConfig(configPath, inputPath) {
@@ -46,7 +54,7 @@ async function loadConfig(configPath, inputPath) {
 }
 
 async function main() {
-  const { positional, configPath, render, embedFonts } = parseArgs(process.argv.slice(2));
+  const { positional, configPath, render, embedFonts, coveredVideos } = parseArgs(process.argv.slice(2));
   const inputArg = positional[0] || "slides.md";
   const inputPath = resolve(process.cwd(), inputArg);
   if (!existsSync(inputPath)) {
@@ -55,6 +63,7 @@ async function main() {
   }
 
   const { config, configDir } = await loadConfig(configPath, inputPath);
+  if (coveredVideos) config.render = { ...config.render, coveredVideos };
   const outputArg = positional[1] || `${basename(inputPath, extname(inputPath))}-editable.pptx`;
   const outputPath = resolve(process.cwd(), outputArg);
 

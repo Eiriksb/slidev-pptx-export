@@ -54,8 +54,18 @@ function runOf(r, u, style, opacity) {
   return run;
 }
 
+// A run with space after it (an inline element's margin or padding, `gapAfter`): its last character
+// gets that much more letter spacing, the only space PowerPoint puts between two characters.
+function runsOf(r, u, style, opacity) {
+  const run = runOf(r, u, style, opacity);
+  const chars = [...(r.text || "")];
+  if (!(r.gapAfter > 0) || !chars.length || r.text.endsWith("\n")) return [run];
+  const last = { ...run, text: chars.pop(), spacing: u.pt((r.spacing || 0) + r.gapAfter) };
+  return chars.length ? [{ ...run, text: chars.join("") }, last] : [last];
+}
+
 function textShape(node, u, style) {
-  const para = { runs: node.runs.map((r) => runOf(r, u, style, node.opacity ?? 1)) };
+  const para = { runs: node.runs.flatMap((r) => runsOf(r, u, style, node.opacity ?? 1)) };
   const align = ALIGN[node.align];
   if (align && align !== "l") para.align = align;
   if (node.lineHeight) para.lineSpacing = u.pt(node.lineHeight);
@@ -77,7 +87,7 @@ function listShape(node, u, style) {
     if (it.spaceBefore > 0) para.spaceBefore = u.pt(it.spaceBefore);
     const align = ALIGN[it.align];
     if (align && align !== "l") para.align = align;
-    para.runs = it.runs.map((r) => runOf(r, u, style, node.opacity ?? 1));
+    para.runs = it.runs.flatMap((r) => runsOf(r, u, style, node.opacity ?? 1));
     return para;
   });
   return { kind: "text", ...u.box(node.rect), geometry: "rect", anchor: "t", inset: 0, paras };
@@ -288,10 +298,13 @@ function tableShape(node, u, style) {
   const op = node.opacity ?? 1;
   const cellOf = (c) => {
     if (c.covered) return { paras: [], hMerge: c.covered.includes("h"), vMerge: c.covered.includes("v") };
-    const para = { runs: c.runs.map((r) => runOf(r, u, style, op)) };
+    const para = { runs: c.runs.flatMap((r) => runsOf(r, u, style, op)) };
     const align = ALIGN[c.align];
     if (align && align !== "l") para.align = align;
     if (c.lineHeight) para.lineSpacing = u.pt(c.lineHeight);
+    // An empty cell (a markdown table's blank header) is as short as the page draws its row: its
+    // empty line would otherwise be 18pt tall and push the row, and the table, down.
+    if (!para.runs.length) Object.assign(para, { endSize: 1, lineSpacing: 1 });
     const out = {
       paras: [para],
       margin: { l: u.inch(c.padding.l), r: u.inch(c.padding.r), t: u.inch(c.padding.t), b: u.inch(c.padding.b) },
@@ -323,7 +336,7 @@ function tableShape(node, u, style) {
 // over the panel box the `pre` itself produced.
 function codeShape(node, u, style) {
   const op = node.opacity ?? 1;
-  const paras = node.lines.map((runs) => ({ lineSpacing: u.pt(node.lineHeight), runs: runs.map((r) => runOf(r, u, style, op)) }));
+  const paras = node.lines.map((runs) => ({ lineSpacing: u.pt(node.lineHeight), runs: runs.flatMap((r) => runsOf(r, u, style, op)) }));
   return { kind: "text", ...u.box(node.rect), geometry: "rect", anchor: "t", inset: 0, wrap: false, paras };
 }
 

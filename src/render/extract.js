@@ -317,7 +317,7 @@
 
   function sameStyle(a, b) {
     return a.font === b.font && a.size === b.size && a.bold === b.bold && a.italic === b.italic &&
-      a.underline === b.underline && a.strike === b.strike && a.spacing === b.spacing &&
+      a.underline === b.underline && a.strike === b.strike && a.spacing === b.spacing && !a.gapAfter &&
       sameColor(a.color, b.color) && sameColor(a.highlight, b.highlight);
   }
 
@@ -670,7 +670,14 @@
           deferred.push(n);
           continue;
         }
+        const start = runs.length;
         collectRuns(n.childNodes, mergeDeco(deco, ccs), highlightOf(n, ccs) || highlight, runs, deferred);
+        // An inline element's horizontal margin, border and padding (a number's margin-right before
+        // its label) is space the text doesn't have: it goes after the last character before it.
+        const side = (k) => (parseFloat(ccs[`margin${k}`]) || 0) + (parseFloat(ccs[`padding${k}`]) || 0) + (parseFloat(ccs[`border${k}Width`]) || 0);
+        const [gapL, gapR] = [side("Left"), side("Right")];
+        if (gapL > 0.5 && start > 0 && runs.length > start) runs[start - 1].gapAfter = r2((runs[start - 1].gapAfter || 0) + gapL * unit);
+        if (gapR > 0.5 && runs.length > start) runs[runs.length - 1].gapAfter = r2((runs[runs.length - 1].gapAfter || 0) + gapR * unit);
       }
     }
 
@@ -1186,6 +1193,15 @@
         // The cell's own background, else the nearest row's or row group's behind it.
         let fill = null;
         for (let e = p.td; e && e !== table && !fill; e = e.parentElement) fill = parseColor(getComputedStyle(e).backgroundColor);
+        // A translucent rule is the colour the page shows, over the cell and what is behind the table:
+        // LibreOffice draws table borders without their alpha (a faint line comes out solid white).
+        const under = colorBehind(p.td, false);
+        if (under) {
+          const base = fill ? composite(fill, under) : under;
+          for (const side of Object.keys(borders)) {
+            if (borders[side].color.alpha < 0.999) borders[side] = { ...borders[side], color: composite(borders[side].color, base) };
+          }
+        }
         cells[p.r][p.c] = {
           runs, align: textAlign(cs), valign: cs.verticalAlign,
           lineHeight: m ? lineHeightOf(cs, m) : r2(px(cs.fontSize) * 1.2),

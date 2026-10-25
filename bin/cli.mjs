@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Usage: slidev-pptx-export [input.md] [output.pptx] [--config path/to/pptx.config.mjs] [--render] [--embed-fonts]
-//                           [--covered-videos animated|video]
+//                           [--videos animated|native]
 //
 // Without --config, looks for pptx.config.mjs next to input.md, falling back to the built-in
 // generic defaults (plain colors/fonts, no logo, no chart resolvers) if none is found.
@@ -9,8 +9,9 @@
 // drawn (custom CSS, HTML and Vue components included). Needs `playwright-chromium` or
 // `playwright` installed (in the deck folder or next to this package), with its Chromium.
 //
-// --covered-videos (render mode): a muted video with slide content over it becomes a looping
-// animated picture (animated, the default; needs ffmpeg) or stays a video (video), see README.
+// --videos (render mode): videos LibreOffice Impress can't show (slide content over them, a slide's
+// second video) become looping animated pictures (animated, the default; needs ffmpeg) or stay
+// videos (native: for PowerPoint only), see README.
 
 import { existsSync } from "node:fs";
 import { resolve, dirname, basename, extname, isAbsolute } from "node:path";
@@ -22,7 +23,7 @@ function parseArgs(argv) {
   let configPath = null;
   let render = false;
   let embedFonts = false;
-  let coveredVideos = null;
+  let videos = null;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--config") {
       configPath = argv[++i];
@@ -32,14 +33,14 @@ function parseArgs(argv) {
       render = true;
     } else if (argv[i] === "--embed-fonts") {
       embedFonts = true;
-    } else if (argv[i] === "--covered-videos" || argv[i].startsWith("--covered-videos=")) {
-      coveredVideos = argv[i].includes("=") ? argv[i].split("=")[1] : argv[++i];
-      if (coveredVideos !== "animated" && coveredVideos !== "video") throw new Error(`--covered-videos takes animated or video, not ${JSON.stringify(coveredVideos)}`);
+    } else if (argv[i] === "--videos" || argv[i].startsWith("--videos=")) {
+      videos = argv[i].includes("=") ? argv[i].split("=")[1] : argv[++i];
+      if (videos !== "animated" && videos !== "native") throw new Error(`--videos takes animated or native, not ${JSON.stringify(videos)}`);
     } else {
       positional.push(argv[i]);
     }
   }
-  return { positional, configPath, render, embedFonts, coveredVideos };
+  return { positional, configPath, render, embedFonts, videos };
 }
 
 async function loadConfig(configPath, inputPath) {
@@ -54,7 +55,7 @@ async function loadConfig(configPath, inputPath) {
 }
 
 async function main() {
-  const { positional, configPath, render, embedFonts, coveredVideos } = parseArgs(process.argv.slice(2));
+  const { positional, configPath, render, embedFonts, videos } = parseArgs(process.argv.slice(2));
   const inputArg = positional[0] || "slides.md";
   const inputPath = resolve(process.cwd(), inputArg);
   if (!existsSync(inputPath)) {
@@ -63,7 +64,7 @@ async function main() {
   }
 
   const { config, configDir } = await loadConfig(configPath, inputPath);
-  if (coveredVideos) config.render = { ...config.render, coveredVideos };
+  if (videos) config.render = { ...config.render, videos };
   const outputArg = positional[1] || `${basename(inputPath, extname(inputPath))}-editable.pptx`;
   const outputPath = resolve(process.cwd(), outputArg);
 

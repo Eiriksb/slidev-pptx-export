@@ -227,8 +227,9 @@ async function videosLoaded(page, sel) {
 }
 
 // A video's file and its poster for the writer. An autoplaying video is seen playing, not its poster
-// (which may even belong to another of its sources), so its poster is the file's own first frame;
-// otherwise the poster attribute's picture, else the frame the element shows. A video that can't be
+// (which may even belong to another of its sources), so its poster is the file's own first frame that
+// shows something; otherwise (or when there is none) the poster attribute's picture, else the frame the
+// element shows. A video that can't be
 // fetched, or that PowerPoint can't play, is a picture of its frame.
 async function loadVideo(page, node) {
   const ext = VIDEO_FORMATS[(node.src.split(/[?#]/)[0].split(".").pop() || "").toLowerCase()];
@@ -253,32 +254,68 @@ async function loadVideo(page, node) {
   }
 }
 
-// The first frame of a video file as a JPEG, drawn in the page (same origin, so the canvas can be
-// read); null when it can't be decoded within 8 s.
+// The first frame of a video file that shows something, as a JPEG, drawn in the page (same origin,
+// so the canvas can be read): tried at 0, 0.5, 1 and 2 s, each once the frame is decoded (a seek
+// can report done before the frame is there, which draws an all-black picture). A frame of one flat
+// colour (a fade-in, a black lead-in) is skipped; null when none shows anything within 15 s.
 async function firstFrame(page, src) {
   const dataUrl = await page.evaluate(async (url) => {
     const v = document.createElement("video");
     v.muted = true;
+    v.playsInline = true;
     v.preload = "auto";
-    const ready = new Promise((ok, fail) => {
-      v.addEventListener("seeked", ok, { once: true });
+    v.style.cssText = "position:fixed;left:0;top:0;width:64px;height:36px;opacity:0;pointer-events:none";
+    document.body.appendChild(v);
+    const wait = (ev, ms) => new Promise((ok, fail) => {
+      v.addEventListener(ev, ok, { once: true });
       v.addEventListener("error", fail, { once: true });
-      setTimeout(fail, 8000);
+      setTimeout(fail, ms);
     });
-    v.addEventListener("loadeddata", () => (v.currentTime = 0.001), { once: true });
-    v.src = url;
-    try {
-      await ready;
+    // resolves once a frame at the current position has been decoded (or after `ms`)
+    const decoded = (ms) => new Promise((ok) => {
+      if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(() => ok());
+      setTimeout(ok, ms);
+    });
+    const draw = (w, h) => {
       const c = document.createElement("canvas");
-      c.width = v.videoWidth;
-      c.height = v.videoHeight;
-      c.getContext("2d").drawImage(v, 0, 0);
-      return c.toDataURL("image/jpeg", 0.9);
+      c.width = w;
+      c.height = h;
+      c.getContext("2d").drawImage(v, 0, 0, w, h);
+      return c;
+    };
+    // whether a frame has more than one flat colour: the spread of its luminance on a small copy
+    const shows = () => {
+      const d = draw(32, 18).getContext("2d").getImageData(0, 0, 32, 18).data;
+      let sum = 0, sq = 0, n = 0;
+      for (let i = 0; i < d.length; i += 4, n++) {
+        const y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        sum += y;
+        sq += y * y;
+      }
+      return Math.sqrt(Math.max(0, sq / n - (sum / n) ** 2)) > 4;
+    };
+    try {
+      v.src = url;
+      await wait("loadeddata", 8000);
+      for (const t of [0, 0.5, 1, 2]) {
+        if (Number.isFinite(v.duration) && t > v.duration) break;
+        const seeked = wait("seeked", 3000);
+        const frame = decoded(1500);
+        v.currentTime = t || 0.001;
+        await seeked;
+        await frame;
+        if (shows()) {
+          const c = draw(v.videoWidth, v.videoHeight);
+          return c.toDataURL("image/jpeg", 0.9);
+        }
+      }
+      return null;
     } catch {
       return null;
     } finally {
       v.removeAttribute("src");
       v.load();
+      v.remove();
     }
   }, src);
   return dataUrl ? { data: Buffer.from(dataUrl.slice(dataUrl.indexOf(",") + 1), "base64"), ext: "jpg" } : null;

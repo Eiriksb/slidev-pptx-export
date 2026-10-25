@@ -105,8 +105,8 @@ function paraXml(para, ctx, opts) {
   const runs = para.runs || [];
   const last = runs[runs.length - 1] || {};
   // endParaRPr keeps an empty trailing line (and an empty paragraph) at the run's size/font
-  // instead of PowerPoint's 18pt default.
-  const end = rPrXml({ size: last.size, font: last.font, typeface: last.typeface }, ctx, "a:endParaRPr");
+  // (an empty one at `endSize`) instead of PowerPoint's 18pt default.
+  const end = rPrXml({ size: last.size ?? para.endSize, font: last.font, typeface: last.typeface }, ctx, "a:endParaRPr");
   return `<a:p>${pPrXml(para, ctx, opts)}${runsXml(runs, ctx)}${end}</a:p>`;
 }
 

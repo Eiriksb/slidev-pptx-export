@@ -94,16 +94,17 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
   the slide is left and `muted` mutes it, the way PowerPoint writes *Start: Automatically* and *Loop until
   stopped*; without autoplay it plays when clicked. A video that is transformed, filtered, masked, clipped or
   in another format (WebM) stays a picture of its current frame, with a notice.
-- A muted video with slide content over it (a cover's background clip under its title) becomes a looping
-  animated GIF in the same place, by default: LibreOffice Impress plays a video in a window above the whole
-  slide, so the text over it would be gone in its slide show, while a picture keeps its place under the text
-  (PowerPoint, Impress, Keynote and Google Slides all play animated GIFs). It needs `ffmpeg` on the PATH
-  (without it the video stays a video, with a notice). The GIF keeps the video's frame rate (up to 30 a
-  second), is up to 20 s long and at most 960 px wide, and is made narrower (down to 640 px) until it is
-  64 MB or less; only then does it drop to 15 frames a second. A camera moving over detailed ground changes
-  every pixel of every frame, so such a GIF is big: about 50 MB for 9 s at 800 px and 25 frames a second.
-  `--covered-videos video` (or `render: { coveredVideos: "video" }`) keeps such videos as videos, for decks
-  shown in PowerPoint only.
+- Videos LibreOffice Impress can't show become looping animated GIFs in the same place, by default. Its
+  slide show plays a video in a window of its own above the whole slide (slide content over a video, such
+  as a cover's title over its background clip, is gone while it plays), and it shows one video per slide.
+  So a muted video with content over it, and every muted video on a slide but its longest, is a GIF
+  (PowerPoint, Impress, Keynote and Google Slides all play them). A GIF keeps the video's frame rate (up to
+  30 a second). Impress decodes all of a GIF's frames before it shows the slide (about 19 million pixels a
+  second), so each GIF is held to about 1.5 s of that: a background clip loops over a shorter stretch (at
+  least 4 s) and then gets narrower; a clip of its own keeps its whole length and gets narrower (down to
+  60 % of its size), then drops frames (to 15 a second at the fewest). It needs `ffmpeg` on the PATH
+  (without it the videos stay videos, with a notice). `--videos native` (or `render: { videos: "native" }`)
+  keeps them all as videos, for decks shown in PowerPoint only.
 - `::before` / `::after` boxes and their text become native shapes and text boxes: a coloured square
   before a label, a numbered circle before a step (`counter()`, `counters()`, `list-item`, `attr()` and
   quoted strings; decimal, alpha and roman numbering), placed by `position: absolute` or as the flow puts

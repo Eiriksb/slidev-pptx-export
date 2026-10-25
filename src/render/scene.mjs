@@ -418,7 +418,7 @@ export function sceneToSpec(scene, style) {
     spec.shapes.push(...shapesOf(node, u, style));
   }
   if (title) {
-    spec.placeholders.title = textShape(title, u, style).paras;
+    spec.placeholders.title = textShape(title, u, style).paras.map((para) => ({ ...para, align: para.align || "l" }));
     spec.placeholders.titleBox = u.box(titleRectOf(title, scene.canvas.w));
     // The box is measured, so none of the master's insets, bottom anchoring or shrink-to-fit
     // apply; a title that fits on one line in the browser must not wrap in PowerPoint.

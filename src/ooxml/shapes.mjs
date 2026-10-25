@@ -142,6 +142,10 @@ export function timingXml(videos) {
   const root = n++;
   let seq = "";
   if (auto.length) {
+    // PowerPoint keeps every effect in the slide's main sequence (p:seq, nodeType mainSeq): a click
+    // group that starts when the slide begins (onBegin of the sequence), holding the videos that start
+    // "With Previous"/"After Previous". Outside a main sequence PowerPoint ignores them.
+    const main = n++;
     const outer = n++;
     const inner = n++;
     const calls = auto.map((v, i) => {
@@ -155,8 +159,11 @@ export function timingXml(videos) {
       );
     });
     seq =
-      `<p:par><p:cTn id="${outer}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="${root}"/></p:cond></p:stCondLst>` +
-      `<p:childTnLst><p:par><p:cTn id="${inner}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${calls.join("")}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`;
+      `<p:seq concurrent="1" nextAc="seek"><p:cTn id="${main}" dur="indefinite" nodeType="mainSeq"><p:childTnLst>` +
+      `<p:par><p:cTn id="${outer}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="${main}"/></p:cond></p:stCondLst>` +
+      `<p:childTnLst><p:par><p:cTn id="${inner}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${calls.join("")}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>` +
+      `</p:childTnLst></p:cTn><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst>` +
+      `<p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq>`;
   }
   const media = videos.map((v) =>
     `<p:video><p:cMediaNode vol="80000"${v.muted ? ' mute="1"' : ""}><p:cTn id="${n++}"${v.loop ? ' repeatCount="indefinite"' : ""} fill="hold" display="0">` +

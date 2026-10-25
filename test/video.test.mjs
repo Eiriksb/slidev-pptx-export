@@ -41,7 +41,8 @@ test("an autoplaying, looping, muted video starts with the slide and repeats", a
   const { z } = await build([video()]);
   const slide = z.text("ppt/slides/slide1.xml");
   assert.match(slide, /<\/p:clrMapOvr><p:timing>/);
-  assert.match(slide, /<p:cond evt="onBegin" delay="0"><p:tn val="1"\/><\/p:cond>/);
+  assert.match(slide, /<p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq">/);
+  assert.match(slide, /<p:cond evt="onBegin" delay="0"><p:tn val="2"\/><\/p:cond>/);
   assert.match(slide, /presetClass="mediacall" presetSubtype="0" fill="hold" nodeType="afterEffect">.*<p:cmd type="call" cmd="playFrom\(0.0\)"><p:cBhvr><p:cTn id="\d+" dur="12500" fill="hold"\/><p:tgtEl><p:spTgt spid="2"\/>/);
   assert.match(slide, /<p:video><p:cMediaNode vol="80000" mute="1"><p:cTn id="\d+" repeatCount="indefinite" fill="hold" display="0">.*<p:spTgt spid="2"\/><\/p:tgtEl><\/p:cMediaNode><\/p:video>/);
 });

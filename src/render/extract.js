@@ -715,8 +715,14 @@
           const cb = contentBox(el, cs, box);
           rect = { x: cb.x, y: m.rect.y, w: cb.w, h: m.rect.h };
         }
+        let lineHeight = lineHeightOf(cs, m);
+        // One line set taller than its glyphs (line-height 2, or an inline-block icon beside it): the
+        // browser centres the glyphs in the line, PowerPoint and LibreOffice put them low in an exact line
+        // spacing. A single line has no other line to keep its distance from, so its spacing is its glyphs'
+        // own height, from the box's top at the glyphs': the text lands where the page draws it.
+        if (!multi && !rotate && lineHeight > rect.h + 1) lineHeight = r2(rect.h);
         if (onCanvas(rect)) {
-          nodes.push({ kind: "text", rect, role: el === titleEl ? "title" : "body", align: textAlign(cs), lineHeight: lineHeightOf(cs, m), singleLine: !multi, runs, opacity: op, rotate });
+          nodes.push({ kind: "text", rect, role: el === titleEl ? "title" : "body", align: textAlign(cs), lineHeight, singleLine: !multi, runs, opacity: op, rotate });
         }
       }
       for (const d of deferred) walk(d, op);
@@ -741,6 +747,33 @@
         }
       }
       flush();
+    }
+
+    // An element's ::before / ::after drawn as a box: a filled or bordered pseudo-element with a
+    // size of its own (content: ""), as decks draw a coloured square before a label. The page doesn't
+    // say where it is, so it is placed as the layout puts it: at the start (::before) or end (::after)
+    // of the content box; in a flex row centred on it when the row centres its items, else at the
+    // first line of text.
+    function pseudoNodes(el, cs, rc, op) {
+      for (const which of ["::before", "::after"]) {
+        const ps = getComputedStyle(el, which);
+        if (!ps.content || ps.content === "none" || ps.content === "normal" || ps.display === "none") continue;
+        const w = px(ps.width);
+        const h = px(ps.height);
+        if (!(w > 0 && h > 0) || ps.position === "absolute" || ps.position === "fixed") continue;
+        const cb = contentBox(el, cs, rc);
+        const flexRow = /flex/.test(cs.display) && !/column/.test(cs.flexDirection);
+        let y = cb.y;
+        if (flexRow && cs.alignItems === "center") y = r2(cb.y + (cb.h - h) / 2);
+        else {
+          const m = measure([...el.childNodes]);
+          if (m) y = r2(m.firstTop + (lineHeightOf(cs, m) - h) / 2);
+        }
+        const x = which === "::before" ? r2(cb.x + px(ps.marginLeft)) : r2(cb.x + cb.w - w - px(ps.marginRight));
+        const prect = { x, y, w: r2(w), h: r2(h) };
+        const d = decoration(ps, prect);
+        if ((d.fill || d.border || d.sides) && onCanvas(prect)) nodes.push({ kind: "box", rect: prect, ...d, opacity: op });
+      }
     }
 
     function boxNode(el, cs, rc, rotate, op) {
@@ -957,6 +990,13 @@
         const { runs, m, blocks } = cellContent(p.td);
         later.push(...blocks);
         const n = (prop) => px(cs[prop]);
+        // Text after an inline-block drawn on its own (a bar, an icon) starts where the page has it,
+        // not at the cell's padding: the left inset grows to the text's measured start.
+        let padL = n("paddingLeft");
+        if (m && blocks.length && !["center", "right"].includes(textAlign(cs))) {
+          const cellX = rectOf(p.td.getBoundingClientRect()).x + n("borderLeftWidth");
+          padL = Math.max(padL, r2(m.rect.x - cellX));
+        }
         const borders = cellBorders(cs);
         if (collapsed) {
           // With collapsed borders a row's rules (Slidev's `tr { border-bottom }`) are drawn along the
@@ -973,7 +1013,7 @@
           runs, align: textAlign(cs), valign: cs.verticalAlign,
           lineHeight: m ? lineHeightOf(cs, m) : r2(px(cs.fontSize) * 1.2),
           fill, borders,
-          padding: { t: n("paddingTop"), r: n("paddingRight"), b: n("paddingBottom"), l: n("paddingLeft") },
+          padding: { t: n("paddingTop"), r: n("paddingRight"), b: n("paddingBottom"), l: padL },
           colspan: p.cspan, rowspan: p.rspan,
         };
       }
@@ -1307,6 +1347,7 @@
         return;
       }
       boxNode(el, cs, box, rotate, op);
+      if (!rotate) pseudoNodes(el, cs, box, op);
       if (tag === "ul" || tag === "ol") {
         listNode(el, box, op);
         return;

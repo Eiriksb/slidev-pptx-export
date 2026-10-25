@@ -86,3 +86,10 @@ test("gradient fills: a linear angle, a radial center, alpha stops", () => {
   const rad = backgroundXml({ gradient: { type: "radial", cx: 0.5, cy: 0.38, stops: [{ pos: 0, color: "#E5F1E8" }, { pos: 0.6, color: "lt1" }, { pos: 1, color: "lt1" }] } });
   assert.match(rad, /^<p:bg><p:bgPr><a:gradFill rotWithShape="1"><a:gsLst>.*<\/a:gsLst><a:path path="circle"><a:fillToRect l="50000" t="38000" r="50000" b="62000"\/><\/a:path><\/a:gradFill><a:effectLst\/><\/p:bgPr><\/p:bg>$/);
 });
+
+
+test("a picture with a corner radius is a rounded rectangle", () => {
+  const xml = pictureXml({ id: 3, name: "Picture 3", rId: "rId2", box: { x: 1, y: 1, w: 4, h: 2 }, radius: 0.2 });
+  assert.match(xml, /<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 10000"\/><\/a:avLst><\/a:prstGeom>/);
+  assert.match(pictureXml({ id: 3, name: "Picture 3", rId: "rId2", box: { x: 1, y: 1, w: 4, h: 2 } }), /<a:prstGeom prst="rect">/);
+});

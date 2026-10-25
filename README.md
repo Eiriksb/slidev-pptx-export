@@ -93,10 +93,15 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
   the slide is left and `muted` mutes it, the way PowerPoint writes *Start: Automatically* and *Loop until
   stopped*; without autoplay it plays when clicked. A video that is transformed, filtered, masked, clipped or
   in another format (WebM) stays a picture of its current frame, with a notice.
+- `::before` / `::after` boxes and their text become native shapes and text boxes: a coloured square
+  before a label, a numbered circle before a step (`counter()`, `counters()`, `list-item`, `attr()` and
+  quoted strings; decimal, alpha and roman numbering), placed by `position: absolute` or as the flow puts
+  them. An unsized pseudo-element with only text in the flow is left to the text around it.
 - Images become native pictures; one that didn't load is skipped, with a notice. SVG images
   stay vector in PowerPoint 2016+ (with a PNG fallback elsewhere) when their box has the
-  SVG's aspect, and are pictures otherwise. An image with rounded corners (its own, or those
-  of a box that clips it) is a picture, since PowerPoint pictures are square.
+  SVG's aspect, and are pictures otherwise. An image rounded with one radius all round (its own, or that of a
+  box it fills which clips it) is a picture with a rounded-rectangle shape; other rounding (some corners,
+  an image in one corner of a rounded box) is a picture of the page's drawing.
 - A `url()` background is native only when it is centred cover/contain or 100% 100%. Any
   other background PowerPoint can't draw - an SVG, tiled or off-centre image, a translucent
   one, layered backgrounds, a repeating gradient, a radial gradient whose shape differs a lot

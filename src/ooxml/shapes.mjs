@@ -95,7 +95,7 @@ const ASVG = "http://schemas.microsoft.com/office/drawing/2016/SVG/main";
 const MEDIA_EXT = "{DAA4B4D4-6D71-4841-9C94-3DA1BC7CA4C3}";
 const P14 = "http://schemas.microsoft.com/office/powerpoint/2010/main";
 
-export function pictureXml({ id, name, descr, rId, svgRId, box, crop, line, shadow, video }) {
+export function pictureXml({ id, name, descr, rId, svgRId, box, crop, line, shadow, video, radius }) {
   const alt = descr ? ` descr="${esc(descr)}"` : "";
   // srcRect crops in 1/1000 of a percent of the image, per side.
   const sides = crop ? ["l", "t", "r", "b"].filter((k) => crop[k] > 0) : [];
@@ -112,7 +112,7 @@ export function pictureXml({ id, name, descr, rId, svgRId, box, crop, line, shad
       : "<p:nvPr/>") +
     "</p:nvPicPr>" +
     `<p:blipFill>${blip}${srcRect}<a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
-    `<p:spPr>${xfrmXml(box)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${line ? lineXml(line) : ""}${shadow ? shadowXml(shadow) : ""}</p:spPr></p:pic>`
+    `<p:spPr>${xfrmXml(box)}${geometryXml({ ...box, geometry: radius > 0 ? "roundRect" : "rect", radius })}${line ? lineXml(line) : ""}${shadow ? shadowXml(shadow) : ""}</p:spPr></p:pic>`
   );
 }
 

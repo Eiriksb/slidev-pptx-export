@@ -560,10 +560,10 @@ test("a canvas that becomes a picture still names the Vue components around it, 
   assert.deepEqual(pie.chartRect, { x: pie.rect.x + 12, y: pie.rect.y + 12, w: pie.rect.w - 24, h: pie.rect.h - 24 }, "the chart goes in the canvas's content box");
 });
 
-test("a rounded image is a picture: its own corners, or a rounded box that clips it where it reaches into a corner", opts, async () => {
+test("a rounded image is a picture of the page when one radius all round can't draw it: some corners, or a rounded box it reaches into a corner of", opts, async () => {
   const img = (style) => `<img src="${PNG}" alt="Photo" style="display:block;width:120px;height:80px;${style}">`;
   const kind = async (html) => (await extractHtml(browser, html)).nodes.filter((n) => n.alt === "Photo").map((n) => [n.kind, n.reason ?? null]);
-  assert.deepEqual(await kind(img("border-radius:12px")), [["raster", "rounded image"]]);
+  assert.deepEqual(await kind(img("border-radius:12px")), [["image", null]], "one radius all round: a rounded-rectangle picture");
   assert.deepEqual(await kind(img("border-bottom-right-radius:50%")), [["raster", "rounded image"]]);
   assert.deepEqual(await kind(img("")), [["image", null]]);
   const box = (style, inner) => `<div style="width:200px;height:120px;border-radius:16px;${style}">${inner}</div>`;
@@ -677,4 +677,79 @@ test("the individual rotate, scale and translate properties count like transform
   assert.equal(textOf(moved), "Moved");
   assert.ok(moved.rect.x >= 69.5, `moved x ${moved.rect.x}`);
   assert.equal(moved.rotate, 0);
+});
+
+test("::before badges: a counter in a round box, placed by position:absolute in its list item", opts, async () => {
+  const css = "<style>ol.s{counter-reset:step;list-style:none;padding:0;margin:0;font:16px Arial}" +
+    "ol.s>li{counter-increment:step;position:relative;padding-left:28px;margin:0 0 8px}" +
+    "ol.s>li::before{content:counter(step);position:absolute;left:0;top:3px;width:18px;height:18px;border-radius:50%;" +
+    "background:#5b93ff;color:#0e1114;font:700 11px Arial;line-height:18px;text-align:center}</style>";
+  const s = await extractHtml(browser, `${css}<ol class="s"><li>Velg opptak</li><li>Foreslår</li><li>Start</li></ol>`);
+  const badges = s.nodes.filter((n) => n.kind === "box" && n.fill && n.fill.hex === "5B93FF");
+  assert.equal(badges.length, 3);
+  assert.deepEqual(badges.map((b) => [b.rect.x, b.rect.w, b.rect.h, b.radius]), [[40, 18, 18, 9], [40, 18, 18, 9], [40, 18, 18, 9]]);
+  const nums = s.nodes.filter((n) => n.kind === "text" && /^\d$/.test(textOf(n)));
+  assert.deepEqual(nums.map(textOf), ["1", "2", "3"]);
+  assert.equal(nums[0].align, "center");
+  assert.equal(nums[0].runs[0].bold, true);
+  // each number sits in its badge, which sits 3px below its item's top
+  const items = s.nodes.filter((n) => n.kind === "list" || (n.kind === "text" && /Velg|Foreslår|Start/.test(textOf(n))));
+  assert.ok(items.length > 0);
+  for (const [b, t] of badges.map((b, i) => [b, nums[i]])) {
+    assert.ok(t.rect.x >= b.rect.x && t.rect.x + t.rect.w <= b.rect.x + b.rect.w + 0.01);
+    assert.ok(Math.abs(t.rect.y + t.rect.h / 2 - (b.rect.y + b.rect.h / 2)) < 0.6);
+  }
+  assert.ok(badges[1].rect.y > badges[0].rect.y);
+});
+
+test("::before text: strings, counter styles, attr() and list items' own numbers", opts, async () => {
+  const css = "<style>.c{counter-reset:sec 2}.c h4{counter-increment:sec;margin:0;font:16px Arial}" +
+    ".c h4::before{content:counter(sec, upper-roman) '. ' attr(data-tag);display:inline-block;width:60px;height:20px;background:#eee}" +
+    "ol.l li::before{content:counter(list-item, lower-alpha) ')';position:absolute;left:-30px;top:0;width:24px;height:20px;background:#ddd}" +
+    "ol.l{list-style:none;margin:0;padding:0 0 0 40px;font:16px Arial}ol.l li{position:relative}</style>";
+  const s = await extractHtml(browser, `${css}<div class="c"><h4 data-tag="A">One</h4><h4 data-tag="B">Two</h4></div>` +
+    '<ol class="l" start="3"><li>x</li><li>y</li></ol>');
+  const texts = s.nodes.filter((n) => n.kind === "text").map(textOf);
+  assert.ok(texts.includes("III. A"), texts.join("|"));
+  assert.ok(texts.includes("IV. B"), texts.join("|"));
+  assert.ok(texts.includes("c)") && texts.includes("d)"), texts.join("|"));
+});
+
+test("a flex row's ::before square (a label's marker) is drawn beside its text", opts, async () => {
+  const s = await extractHtml(browser,
+    '<style>.k{display:flex;align-items:center;gap:8px;font:11px Arial}.k::before{content:"";width:8px;height:8px;border-radius:2px;background:#5b93ff}</style>' +
+    '<div class="k">MASKINVARE</div>');
+  const sq = s.nodes.find((n) => n.kind === "box");
+  const label = s.nodes.find((n) => n.kind === "text");
+  assert.deepEqual([sq.rect.x, sq.rect.w, sq.rect.h, sq.radius], [40, 8, 8, 2]);
+  assert.ok(label.rect.x >= 40 + 8 + 7, "the text starts after the square and the gap");
+  assert.ok(Math.abs(sq.rect.y + 4 - (label.rect.y + label.rect.h / 2)) < 2, "centred on the text");
+});
+
+test("a table cell's text after an inline-block bar starts where the page draws it", opts, async () => {
+  const s = await extractHtml(browser,
+    '<table style="font:14px Arial;border-collapse:collapse"><tr><td style="padding:4px;width:300px">' +
+    '<div style="display:inline-block;width:150px;height:8px;background:#333"></div><span style="margin-left:10px">50 s</span></td></tr></table>');
+  const table = s.nodes.find((n) => n.kind === "table");
+  const cell = table.rows[0][0];
+  assert.equal(cell.runs.map((r) => r.text).join("").trim(), "50 s");
+  assert.ok(cell.padding.l >= 4 + 150 + 9, `padding.l ${cell.padding.l}`);
+});
+
+test("one line set taller than its glyphs keeps its glyphs' height as its spacing", opts, async () => {
+  const s = await extractHtml(browser, '<h3 style="margin:0;font:20px Arial;line-height:42px">Tidsbruk</h3>');
+  const t = s.nodes.find((n) => n.kind === "text");
+  assert.equal(t.singleLine, true);
+  assert.ok(t.lineHeight < 30 && Math.abs(t.lineHeight - t.rect.h) < 0.01, `lineHeight ${t.lineHeight}, h ${t.rect.h}`);
+});
+
+
+test("a rounded image (its own radius, or a rounded frame it fills) is a native picture with that radius", opts, async () => {
+  const s = await extractHtml(browser,
+    `<img src="${PNG}" style="width:200px;height:100px;border-radius:12px;display:block">` +
+    `<figure style="margin:10px 0 0;width:200px;border-radius:10px;overflow:hidden;line-height:0"><img src="${PNG}" style="width:200px;height:100px;display:block"></figure>` +
+    `<img src="${PNG}" style="width:200px;height:100px;border-radius:12px 0 0 0;display:block;margin-top:10px">`);
+  const imgs = s.nodes.filter((n) => n.kind === "image");
+  assert.deepEqual(imgs.map((n) => n.radius), [12, 10]);
+  assert.deepEqual(s.nodes.filter((n) => n.kind === "raster").map((n) => n.reason), ["rounded image"], "one corner only stays a picture of the page");
 });

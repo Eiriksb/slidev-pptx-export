@@ -243,6 +243,7 @@ function imageShape(node, u, style) {
   const { rect, crop } = fitImage(node.rect, node.natural, node.fit);
   const shape = { kind: "image", ...u.box(rect), data: node.data, ext: node.ext, alt: node.alt || "" };
   if (crop) shape.crop = crop;
+  if (node.radius > 0) shape.radius = u.inch(node.radius);
   if (node.svg) shape.svg = node.svg;
   const op = node.opacity ?? 1;
   if (node.border) shape.line = { width: u.pt(node.border.width), color: colorOf(node.border.color, style) };

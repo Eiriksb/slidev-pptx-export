@@ -1021,6 +1021,7 @@
 
     function collectItems(listEl, box, level, items, op) {
       let first = true;
+      let number = listEl.localName === "ol" ? listEl.start || 1 : 1;
       for (const li of listEl.children) {
         if (li.localName !== "li") continue;
         const lcs = getComputedStyle(li);
@@ -1061,9 +1062,17 @@
             lineHeight, align: textAlign(lcs), runs, lastTop: m ? m.lastTop : lr.y,
           };
           if (marker === "number" && first) item.start = listEl.localName === "ol" ? listEl.start || 1 : 1;
+          // An outside marker is drawn left of the text, past the list's own box when its padding is narrow:
+          // what it takes ("1. ", "• ") at the marker's font, so the list can be given that room.
+          if (marker !== "none" && lcs.listStylePosition !== "inside") {
+            const mcs = getComputedStyle(li, "::marker");
+            probe.font = `${mcs.fontWeight} ${mcs.fontSize} ${mcs.fontFamily}`;
+            item.markerWidth = r2(probe.measureText(marker === "number" ? `${number}. ` : "\u2022 ").width * unit);
+          }
           items.push(item);
           first = false;
         }
+        if (marker === "number") number++;
         for (const n of nested) collectItems(n, box, level + 1, items, op);
         for (const b of [...blocks, ...deferred]) walk(b, op);
       }
@@ -1072,7 +1081,12 @@
     function listNode(listEl, box, op) {
       const items = [];
       collectItems(listEl, box, 0, items, op);
-      if (items.length && onCanvas(box)) nodes.push({ kind: "list", rect: box, items: items.map(({ lastTop, ...it }) => it), opacity: op });
+      // Markers wider than the room left of their text (a list with little padding draws them in its margin):
+      // the text box starts that much further left, so PowerPoint's hanging number fits before the text.
+      const short = Math.max(0, ...items.map((it) => (it.markerWidth || 0) - it.indent));
+      const rect = short > 0.5 ? { ...box, x: r2(box.x - short), w: r2(box.w + short) } : box;
+      if (short > 0.5) for (const it of items) it.indent = r2(it.indent + short);
+      if (items.length && onCanvas(box)) nodes.push({ kind: "list", rect, items: items.map(({ lastTop, markerWidth, ...it }) => it), opacity: op });
     }
 
     // The opacity an element is drawn with inside `root`: the product of its own and its ancestors'

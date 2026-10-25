@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { Package, REL, CT } from "./package.mjs";
 import { themeXml } from "./theme.mjs";
 import { layoutDefs, layoutXml, masterXml } from "./master.mjs";
-import { placeholderXml, shapeXml, pictureXml, slideXml, graphicFrameXml, backgroundXml } from "./shapes.mjs";
+import { placeholderXml, shapeXml, pictureXml, slideXml, graphicFrameXml, backgroundXml, timingXml } from "./shapes.mjs";
 import { presentationXml, presPropsXml, viewPropsXml, appXml, coreXml } from "./presentation.mjs";
 import { TABLE_URI, tableXml, tableStylesXml } from "./table.mjs";
 import { CHART_URI, chartXml, chartRefXml } from "./chart.mjs";
@@ -20,7 +20,9 @@ const MASTER = "/ppt/slideMasters/slideMaster1.xml";
 const THEME = "/ppt/theme/theme1.xml";
 const NOTES_MASTER = "/ppt/notesMasters/notesMaster1.xml";
 
-// Each distinct image is stored once, however many slides (or the master) use it.
+const VIDEO_EXTS = new Set(["mp4", "mov"]);
+
+// Each distinct image (and video) is stored once, however many slides (or the master) use it.
 class MediaStore {
   constructor(pkg) {
     this.pkg = pkg;
@@ -34,7 +36,7 @@ class MediaStore {
     const ext = (fromFile ? extname(source).slice(1) : source.ext).toLowerCase().replace("jpeg", "jpg");
     const key = `${createHash("sha1").update(buf).digest("hex")}.${ext}`;
     if (!this.parts.has(key)) {
-      const part = `/ppt/media/image${this.parts.size + 1}.${ext}`;
+      const part = `/ppt/media/${VIDEO_EXTS.has(ext) ? "media" : "image"}${this.parts.size + 1}.${ext}`;
       this.pkg.addMedia(part, buf);
       this.parts.set(key, part);
     }
@@ -51,6 +53,14 @@ async function shapeToXml(shape, id, env) {
       const rId = pkg.rel(part, media.add(shape.path ?? { data: shape.data, ext: shape.ext }), REL.image);
       const svgRId = shape.svg ? pkg.rel(part, media.add({ data: shape.svg, ext: "svg" }), REL.image) : null;
       return pictureXml({ id, name: `Picture ${id}`, descr: shape.alt, rId, svgRId, box: shape, crop: shape.crop, line: shape.line, shadow: shape.shadow });
+    }
+    case "video": {
+      // one file, two relationships: the linked video (a:videoFile) and the embedded media (p14:media)
+      const file = media.add({ data: shape.data, ext: shape.ext });
+      const video = { linkRId: pkg.rel(part, file, REL.video), embedRId: pkg.rel(part, file, REL.media) };
+      const rId = pkg.rel(part, media.add(shape.poster), REL.image);
+      env.videos.push({ spid: id, autoplay: shape.autoplay, loop: shape.loop, muted: shape.muted, duration: shape.duration });
+      return pictureXml({ id, name: `Video ${id}`, descr: shape.alt, rId, box: shape, crop: shape.crop, video });
     }
     case "table":
       return graphicFrameXml({ id, name: `Table ${id}`, box: shape, uri: TABLE_URI, inner: tableXml(shape, ctx) });
@@ -97,7 +107,7 @@ export async function writePptx(slides, deck) {
   const logo = deck.logo ? { rId: pkg.rel(MASTER, media.add(deck.logo.path), REL.image), box: deck.logo.box } : null;
   // Render mode can put elements every slide shares (a footer logo) on the master. Their ids
   // follow the master's own title (2), body (3) and logo (4).
-  const masterEnv = { pkg, part: MASTER, media, ctx, counters };
+  const masterEnv = { pkg, part: MASTER, media, ctx, counters, videos: [] };
   let extra = "";
   let masterShapeId = 5;
   for (const shape of deck.masterShapes || []) extra += await shapeToXml(shape, masterShapeId++, masterEnv);
@@ -123,7 +133,7 @@ export async function writePptx(slides, deck) {
     if (!layout) throw new Error(`Slide ${i + 1}: unknown layout ${JSON.stringify(spec.layout)}`);
     pkg.rel(part, layout.part, REL.slideLayout);
     const sctx = { ...ctx, link: (url) => pkg.rel(part, url, REL.hyperlink, { external: true }) };
-    const env = { pkg, part, media, ctx: sctx, counters };
+    const env = { pkg, part, media, ctx: sctx, counters, videos: [] };
 
     let nextId = 2;
     let xml = "";
@@ -155,7 +165,7 @@ export async function writePptx(slides, deck) {
     let bg = "";
     if (spec.background?.image) bg = backgroundXml(spec.background, pkg.rel(part, media.add(spec.background.image), REL.image));
     else if (spec.background?.color || spec.background?.gradient) bg = backgroundXml(spec.background);
-    pkg.addXml(part, CT.slide, slideXml(xml, bg));
+    pkg.addXml(part, CT.slide, slideXml(xml, bg, timingXml(env.videos)));
     if (spec.notes) {
       const notesPart = `/ppt/notesSlides/notesSlide${i + 1}.xml`;
       pkg.addXml(notesPart, CT.notesSlide, notesSlideXml(spec.notes, ctx));

@@ -66,15 +66,19 @@ export async function startDeckServer({ inputPath, timeout = 60000 }) {
       setTimeout(() => child.kill("SIGKILL"), 3000).unref();
     });
 
-  const url = `http://127.0.0.1:${port}`;
+  // Slidev is asked to bind 127.0.0.1, but some versions listen on "localhost" anyway, which can be
+  // the IPv6 loopback only (Slidev 53 on Linux): whichever answers is the deck's address.
+  const urls = [`http://127.0.0.1:${port}`, `http://[::1]:${port}`];
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     if (spawnError) throw new Error(`Slidev could not be started: ${spawnError.message}`);
     if (exited !== null) throw new Error(`Slidev exited before it was ready (code ${exited}):\n${log()}`);
-    try {
-      if ((await fetch(`${url}/`)).ok) return { url, stop, log, version: cli.version };
-    } catch {
-      // not listening yet
+    for (const url of urls) {
+      try {
+        if ((await fetch(`${url}/`)).ok) return { url, stop, log, version: cli.version };
+      } catch {
+        // not listening (there) yet
+      }
     }
     await new Promise((r) => setTimeout(r, 250));
   }

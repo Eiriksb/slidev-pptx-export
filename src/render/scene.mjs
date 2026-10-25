@@ -251,6 +251,18 @@ function imageShape(node, u, style) {
   return shape;
 }
 
+// A video: placed and cropped as the page draws it (object-fit), its poster as the picture shown
+// until it plays, starting by itself, looping and muted as the element does.
+function videoShape(node, u) {
+  const { rect, crop } = fitImage(node.rect, node.natural, node.fit);
+  const shape = {
+    kind: "video", ...u.box(rect), data: node.data, ext: node.ext, poster: node.posterImage, alt: node.alt || "",
+    autoplay: !!node.autoplay, loop: !!node.loop, muted: !!node.muted, duration: node.duration,
+  };
+  if (crop) shape.crop = crop;
+  return shape;
+}
+
 const VALIGN = { middle: "ctr", bottom: "b" };
 
 // A table: one native table with no style, every cell carrying its own fill, borders, margins and
@@ -346,6 +358,8 @@ export function shapesOf(node, u, style) {
       return node.data ? [imageShape(node, u, style)] : [];
     case "raster":
       return node.png ? [{ kind: "image", ...u.box(node.rect), data: node.png, ext: "png", alt: node.alt || "" }] : [];
+    case "video":
+      return node.data ? [videoShape(node, u)] : [];
     case "missing":
       return [];
     default:

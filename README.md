@@ -87,6 +87,12 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
   and rotated or translucent charts are exported as pictures. A `chartResolvers` entry
   returning `kind: "barchart"` for the component still wins, also over a chart that would
   have been a picture.
+- Videos become native PowerPoint videos: the file (MP4 or MOV) is embedded, cropped or letterboxed as
+  the page draws it (`object-fit`), with its `poster` (else the frame shown) as the picture before it plays.
+  `autoplay` (the attribute, or `<SlidevVideo autoplay>`) starts it with the slide, `loop` repeats it until
+  the slide is left and `muted` mutes it, the way PowerPoint writes *Start: Automatically* and *Loop until
+  stopped*; without autoplay it plays when clicked. A video that is transformed, filtered, masked, clipped or
+  in another format (WebM) stays a picture of its current frame, with a notice.
 - Images become native pictures; one that didn't load is skipped, with a notice. SVG images
   stay vector in PowerPoint 2016+ (with a PNG fallback elsewhere) when their box has the
   SVG's aspect, and are pictures otherwise. An image with rounded corners (its own, or those
@@ -116,7 +122,7 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
   supported, the export stops with an error instead; Chromium is launched before Slidev
   starts, so a missing browser fails fast.
 - Limits: each slide is captured in its final `v-click` state, with every fragment shown.
-  Animations and transitions, hyperlinks (link text keeps its styling), Slidev drawings and
+  Animations and transitions (videos excepted, see above), hyperlinks (link text keeps its styling), Slidev drawings and
   font embedding (viewers need the fonts) aren't carried over.
 
 Render mode needs the deck's dependencies installed (`npm install` in the deck folder), Node

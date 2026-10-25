@@ -79,18 +79,20 @@ async function captureSlide(page, baseUrl, s, canvas, screenshots) {
   // Again, in case Vite reloaded the page while it settled.
   await hideViteOverlay(page);
   const screenshot = screenshots ? await page.locator(sel).screenshot({ animations: "disabled" }) : null;
+  await videosLoaded(page, sel);
   await page.addScriptTag({ content: EXTRACT });
   const scene = await page.evaluate(({ pageSel, size }) => window.__pptxExtract(document.querySelector(pageSel), size), { pageSel: sel, size: canvas });
   // A picture shows what is behind its element, never what is drawn above it: the slide's
   // pictures are taken without the global top layer over them, the global bottom layer's without
   // the slide either. Those are exported on their own, above the picture.
   for (const [layer, above] of [["bottom", [sel, TOP_LAYER]], [undefined, [TOP_LAYER]], ["top", []]]) {
-    const own = scene.nodes.filter((n) => n.layer === layer && (n.kind === "image" || n.kind === "raster"));
+    const own = scene.nodes.filter((n) => n.layer === layer && (n.kind === "image" || n.kind === "raster" || n.kind === "video"));
     if (!own.length) continue;
     const shown = await hide(page, above);
     try {
       for (const node of own) {
         if (node.kind === "image") await loadImage(page, node);
+        else if (node.kind === "video") await loadVideo(page, node);
         else node.png = await pictureOf(page, node);
       }
     } finally {
@@ -206,6 +208,45 @@ async function loadImage(page, node) {
       return;
     }
     Object.assign(node, { kind: "raster", reason: `image not fetched: ${String(err.message || err).split("\n")[0]}`, label: node.alt || node.src, png: await elementShot(page, node.id) });
+  }
+}
+
+// Formats PowerPoint plays embedded (others stay pictures of their current frame).
+const VIDEO_FORMATS = { mp4: "mp4", m4v: "mp4", mov: "mov" };
+
+// Waits (up to 8 s) until the slide's videos know their size, so they can be exported as videos.
+async function videosLoaded(page, sel) {
+  await page.evaluate(async (pageSel) => {
+    const vids = [...(document.querySelector(pageSel)?.querySelectorAll("video") || [])];
+    await Promise.all(vids.map((v) => (v.readyState >= 1 ? null : new Promise((ok) => {
+      v.addEventListener("loadedmetadata", ok, { once: true });
+      v.addEventListener("error", ok, { once: true });
+      setTimeout(ok, 8000);
+    }))));
+  }, sel);
+}
+
+// A video's file and its poster for the writer: the poster attribute's picture, else the frame the
+// element shows. A video that can't be fetched, or that PowerPoint can't play, is a picture of its frame.
+async function loadVideo(page, node) {
+  const ext = VIDEO_FORMATS[(node.src.split(/[?#]/)[0].split(".").pop() || "").toLowerCase()];
+  try {
+    if (!ext) throw new Error("not a format PowerPoint plays embedded");
+    node.data = await fetchBytes(page, node.src);
+    node.ext = ext;
+    if (node.poster) {
+      try {
+        const data = await fetchBytes(page, node.poster);
+        const t = imageSize(data).type;
+        if (t === "png" || t === "jpg" || t === "gif") node.posterImage = { data, ext: t };
+      } catch {
+        // the element's own frame below
+      }
+    }
+    if (!node.posterImage) node.posterImage = { data: await elementShot(page, node.id), ext: "png" };
+  } catch (err) {
+    delete node.data;
+    Object.assign(node, { kind: "raster", reason: `video not embedded: ${String(err.message || err).split("\n")[0]}`, png: await elementShot(page, node.id) });
   }
 }
 

@@ -760,6 +760,35 @@
       }
     }
 
+    // A <video> PowerPoint can play as it is drawn: loaded (its size known), not transformed, filtered,
+    // masked, clipped or blended (those stay pictures of their current frame). Its file and poster are
+    // fetched by capture.mjs; `fit` and `natural` crop or letterbox it the way the page does.
+    function videoNode(el, cs, rc, op) {
+      const src = el.currentSrc || el.src;
+      if (!src || !el.videoWidth || !el.videoHeight) return false;
+      if (transformOf(cs) || (cs.filter && cs.filter !== "none") || (cs.mixBlendMode && cs.mixBlendMode !== "normal")) return false;
+      const mask = cs.maskImage || cs.webkitMaskImage;
+      if ((mask && mask !== "none") || (cs.clipPath && cs.clipPath !== "none")) return false;
+      if (!onCanvas(rc)) return true;
+      nodes.push({
+        kind: "video", id: mark(el), rect: contentBox(el, cs, rc), src, poster: el.poster || null,
+        fit: cs.objectFit || "contain", natural: { w: el.videoWidth, h: el.videoHeight },
+        duration: Number.isFinite(el.duration) ? el.duration : null, loop: el.loop, muted: el.muted,
+        autoplay: el.autoplay || slidevAutoplay(el), alt: el.getAttribute("aria-label") || el.getAttribute("title") || "", opacity: op,
+        label: labelOf(el),
+      });
+      return true;
+    }
+
+    // <SlidevVideo autoplay> starts its video from code when the slide is shown, not through the
+    // element's autoplay attribute; the component behind the element (Vue's dev build, which Slidev's
+    // dev server runs) says whether it does.
+    function slidevAutoplay(el) {
+      const c = el.__vueParentComponent;
+      const name = c && c.type && (c.type.__name || c.type.name || "");
+      return !!(c && /SlidevVideo/.test(name) && c.props && c.props.autoplay);
+    }
+
     function imageNode(el, cs, rc, rotate, op) {
       const src = el.currentSrc || el.src;
       if (!el.complete || !el.naturalWidth) {
@@ -1242,6 +1271,7 @@
       }
       const r = el.getBoundingClientRect();
       const rc = rectOf(r);
+      if (tag === "video" && videoNode(el, cs, rc, op)) return;
       const reason = rasterReason(el, cs, tag, op, rc);
       if (reason) {
         if (!onCanvas(rc)) return;

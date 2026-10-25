@@ -98,9 +98,10 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
   animated GIF in the same place, by default: LibreOffice Impress plays a video in a window above the whole
   slide, so the text over it would be gone in its slide show, while a picture keeps its place under the text
   (PowerPoint, Impress, Keynote and Google Slides all play animated GIFs). It needs `ffmpeg` on the PATH
-  (without it the video stays a video, with a notice). The GIF is up to 20 s long, at most 800 px wide and
-  8 frames a second, and made smaller and choppier until it is 12 MB or less (a camera moving over detailed
-  ground changes every pixel of every frame).
+  (without it the video stays a video, with a notice). The GIF keeps the video's frame rate (up to 30 a
+  second), is up to 20 s long and at most 960 px wide, and is made narrower (down to 640 px) until it is
+  64 MB or less; only then does it drop to 15 frames a second. A camera moving over detailed ground changes
+  every pixel of every frame, so such a GIF is big: about 50 MB for 9 s at 800 px and 25 frames a second.
   `--covered-videos video` (or `render: { coveredVideos: "video" }`) keeps such videos as videos, for decks
   shown in PowerPoint only.
 - `::before` / `::after` boxes and their text become native shapes and text boxes: a coloured square

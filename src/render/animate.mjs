@@ -4,7 +4,8 @@
 // picture stays where it is in the stacking order in both, and in Keynote and Google Slides too.
 // FFmpeg makes the GIF (a palette per clip, no dithering: noise is what LZW packs worst); without it
 // the video stays a video. A camera moving over detailed ground changes every pixel of every frame, so
-// a GIF is big: it is made smaller and choppier until it fits a size budget.
+// a GIF is big: it keeps the video's own frame rate (up to 30 a second, so it moves as smoothly) and
+// is made narrower until it fits a size budget; only past the narrowest does it drop frames.
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -32,15 +33,24 @@ export function hasFfmpeg(bin = "ffmpeg") {
   return ffmpegFound;
 }
 
+// A video's frame rate, from ffmpeg's description of its stream (null when it gives none).
+function frameRate(src, bin) {
+  const r = spawnSync(bin, ["-hide_banner", "-i", src], { encoding: "utf8" });
+  const m = /Video:.*?([\d.]+) fps/.exec(r.stderr || "");
+  return m ? Number(m[1]) : null;
+}
+
 // GIF bytes for a video: `width` pixels wide at most (never wider than the video), `fps` frames a
-// second, looping forever when the video loops (else played once), at most `seconds` long.
-export function videoGif(data, { width, fps = 8, seconds = 20, loop = true, bin = "ffmpeg" }) {
+// second (default: the video's own, at most 30), looping forever when the video loops (else played
+// once), at most `seconds` long.
+export function videoGif(data, { width, fps = null, seconds = 20, loop = true, bin = "ffmpeg" }) {
   const dir = mkdtempSync(join(tmpdir(), "pptx-gif-"));
   try {
     const src = join(dir, "in.mp4");
     const out = join(dir, "out.gif");
     writeFileSync(src, data);
-    const vf = `fps=${fps},scale='min(${Math.round(width)},iw)':-2:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle`;
+    const rate = fps ?? Math.min(frameRate(src, bin) || 25, 30);
+    const vf = `fps=${rate},scale='min(${Math.round(width)},iw)':-2:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle`;
     const r = spawnSync(bin, ["-v", "error", "-y", "-t", String(seconds), "-i", src, "-filter_complex", vf, "-loop", loop ? "0" : "-1", out], { encoding: "utf8" });
     if (r.status !== 0) throw new Error((r.stderr || r.error?.message || "ffmpeg failed").trim().split("\n")[0]);
     return readFileSync(out);
@@ -49,13 +59,14 @@ export function videoGif(data, { width, fps = 8, seconds = 20, loop = true, bin 
   }
 }
 
-// Width (pixels at most) and frame rate tried in turn until a GIF fits the budget.
-const STEPS = [{ width: 800, fps: 8 }, { width: 720, fps: 6 }, { width: 560, fps: 6 }, { width: 480, fps: 5 }];
+// Width (pixels at most) and frame rate (null: the video's own) tried in turn until a GIF fits the
+// budget: narrower first, fewer frames only as a last resort.
+const STEPS = [{ width: 960, fps: null }, { width: 800, fps: null }, { width: 720, fps: null }, { width: 640, fps: null }, { width: 640, fps: 15 }];
 
 // Turns each covered video of a scene into an animated picture in place (same box, same object-fit
 // crop): the first of STEPS (never wider than the video, nor than `scale` GIF pixels per CSS pixel of
 // what is shown) whose GIF is at most `maxBytes`, else the last. Returns what was done, for notices.
-export function animateCoveredVideos(scene, { scale = 1.25, maxBytes = 12 * 2 ** 20, gif = videoGif } = {}) {
+export function animateCoveredVideos(scene, { scale = 1.25, maxBytes = 64 * 2 ** 20, gif = videoGif } = {}) {
   const done = [];
   for (const node of coveredVideos(scene.nodes)) {
     // the part of the video in view under object-fit: cover is narrower than the whole width

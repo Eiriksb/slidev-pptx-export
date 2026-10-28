@@ -4,6 +4,8 @@ Converts a [Slidev](https://sli.dev) markdown deck into a fully editable native 
 real PowerPoint text boxes, tables, shapes and charts, not the screenshot-per-slide export
 that `slidev export` produces.
 
+https://github.com/user-attachments/assets/1b60f657-2fee-46d3-a69f-b893036e3c39
+
 It understands plain markdown (headings, paragraphs, lists, tables, blockquotes, images,
 fenced code blocks, `**bold**`/`*italic*`/`` `code` ``) plus a handful of common Slidev
 authoring patterns: frontmatter-separated slides, Tailwind/UnoCSS grid layouts (`grid

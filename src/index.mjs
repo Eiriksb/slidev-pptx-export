@@ -10,6 +10,7 @@ import { mergeConfig } from "./config.mjs";
 import { splitSlides, parseSlide } from "./parse.mjs";
 import { layoutDeck, deckStyle } from "./layout.mjs";
 import { writePptx } from "./ooxml/index.mjs";
+import { fontResolver } from "./fonts.mjs";
 
 const LOGO_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif"]);
 
@@ -33,6 +34,7 @@ function usableLogo(logo, configDir) {
  * @param {string} [options.outputPath] - defaults to "<input-basename>-editable.pptx" next to inputPath
  * @param {object} [options.config] - see default-config.mjs; typically loaded from a deck's pptx.config.mjs
  * @param {string} [options.configDir] - directory config-relative paths (logo.path) resolve against; defaults to inputPath's directory
+ * @param {boolean} [options.embedFonts] - embed the fonts the slides use (TrueType, licence permitting; see README "Fonts")
  * @param {boolean|{screenshots?: boolean}} [options.render] - render the deck with its own Slidev in Chromium and convert what is drawn (see README "Render mode")
  * @returns {Promise<{ outputPath: string, slideCount: number, translatedCharts: number, unresolvedCharts: string[], screenshots?: (Buffer|null)[] }>}
  *   `screenshots` (render mode with `screenshots: true`): Slidev's own screenshot of each exported slide, null for a slide exported from markdown
@@ -86,6 +88,8 @@ export async function convert(options) {
     // Drawn bottom-left on every slide via the slide master.
     logo: config.logo ? { path: config.logo.path, box: style.geometry.logo } : null,
     masterShapes: rendered ? rendered.masterShapes : [],
+    // --embed-fonts / embedFonts: the fonts the slides use, carried in the file
+    fontResolver: options.embedFonts || config.embedFonts?.enabled ? fontResolver(config.embedFonts || {}, configDir) : null,
   });
 
   const outputPath = resolve(options.outputPath || `${basename(inputPath, extname(inputPath))}-editable.pptx`);

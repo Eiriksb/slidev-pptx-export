@@ -76,8 +76,8 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
 
 - Text keeps its rendered font, size, weight, color, letter spacing and position; slide
   titles still go into title placeholders.
-- Boxes with a background, border, rounded corners, shadow or gradient (cards, callouts)
-  become native shapes; lists get native bullets in their rendered colors; tables become
+- Boxes with a background, border (solid, dashed or dotted; a single dashed side is a native line),
+  rounded corners, shadow or gradient (cards, callouts) become native shapes; lists get native bullets in their rendered colors; tables become
   native tables with each cell's own fill and borders; code blocks keep their syntax colors
   (a block that scrolls or wraps in the page is a picture instead).
 - Chart.js bar charts (e.g. through vue-chartjs) become native, editable charts with the
@@ -87,10 +87,33 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
   and rotated or translucent charts are exported as pictures. A `chartResolvers` entry
   returning `kind: "barchart"` for the component still wins, also over a chart that would
   have been a picture.
+- Videos become native PowerPoint videos: the file (MP4 or MOV) is embedded, cropped or letterboxed as
+  the page draws it (`object-fit`), with its `poster` (else the frame shown) as the picture before it plays
+  (an autoplaying video's own first frame: it is seen playing, and its poster may belong to another source).
+  `autoplay` (the attribute, or `<SlidevVideo autoplay>`) starts it with the slide, `loop` repeats it until
+  the slide is left and `muted` mutes it, the way PowerPoint writes *Start: Automatically* and *Loop until
+  stopped*; without autoplay it plays when clicked. A video that is transformed, filtered, masked, clipped or
+  in another format (WebM) stays a picture of its current frame, with a notice.
+- Videos LibreOffice Impress can't show become looping animated GIFs in the same place, by default. Its
+  slide show plays a video in a window of its own above the whole slide (slide content over a video, such
+  as a cover's title over its background clip, is gone while it plays), and it shows one video per slide.
+  So a muted video with content over it, and every muted video on a slide but its longest, is a GIF
+  (PowerPoint, Impress, Keynote and Google Slides all play them). A GIF keeps the video's frame rate (up to
+  30 a second). Impress decodes all of a GIF's frames before it shows the slide (about 19 million pixels a
+  second), so each GIF is held to about 1.5 s of that: a background clip loops over a shorter stretch (at
+  least 4 s) and then gets narrower; a clip of its own keeps its whole length and gets narrower (down to
+  60 % of its size), then drops frames (to 15 a second at the fewest). It needs `ffmpeg` on the PATH
+  (without it the videos stay videos, with a notice). `--videos native` (or `render: { videos: "native" }`)
+  keeps them all as videos, for decks shown in PowerPoint only.
+- `::before` / `::after` boxes and their text become native shapes and text boxes: a coloured square
+  before a label, a numbered circle before a step (`counter()`, `counters()`, `list-item`, `attr()` and
+  quoted strings; decimal, alpha and roman numbering), placed by `position: absolute` or as the flow puts
+  them. An unsized pseudo-element with only text in the flow is left to the text around it.
 - Images become native pictures; one that didn't load is skipped, with a notice. SVG images
   stay vector in PowerPoint 2016+ (with a PNG fallback elsewhere) when their box has the
-  SVG's aspect, and are pictures otherwise. An image with rounded corners (its own, or those
-  of a box that clips it) is a picture, since PowerPoint pictures are square.
+  SVG's aspect, and are pictures otherwise. An image rounded with one radius all round (its own, or that of a
+  box it fills which clips it) is a picture with a rounded-rectangle shape; other rounding (some corners,
+  an image in one corner of a rounded box) is a picture of the page's drawing.
 - A `url()` background is native only when it is centred cover/contain or 100% 100%. Any
   other background PowerPoint can't draw - an SVG, tiled or off-centre image, a translucent
   one, layered backgrounds, a repeating gradient, a radial gradient whose shape differs a lot
@@ -116,13 +139,40 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
   supported, the export stops with an error instead; Chromium is launched before Slidev
   starts, so a missing browser fails fast.
 - Limits: each slide is captured in its final `v-click` state, with every fragment shown.
-  Animations and transitions, hyperlinks (link text keeps its styling), Slidev drawings and
-  font embedding (viewers need the fonts) aren't carried over.
+  Animations and transitions (videos excepted, see above), hyperlinks (link text keeps its styling) and Slidev
+  drawings aren't carried over; fonts only with `--embed-fonts` (see Fonts).
 
 Render mode needs the deck's dependencies installed (`npm install` in the deck folder), Node
 20.12 or newer (what Slidev 52 requires) and Playwright's Chromium. It looks for
 `playwright-chromium`, then `playwright`, each first in the deck folder and then next to this
 package. It takes roughly 10–30 seconds per deck.
+
+## Fonts (`--embed-fonts`)
+
+```bash
+npx slidev-pptx-export slides.md slides.pptx --render --embed-fonts
+```
+
+The fonts the slides use are carried in the `.pptx`, so it looks the same on a machine without them:
+regular, bold, italic and bold italic of each family, as Embedded OpenType (`/ppt/fonts/*.fntdata`, what
+PowerPoint itself writes), listed in the presentation's `embeddedFontLst`.
+
+- Each font name is looked up with fontconfig (`fc-match`). A web font's name that no installed font has
+  ("Inter Variable", as `@fontsource-variable` calls Inter) falls back to the family without " Variable",
+  and the slides are written with that family's name, the one inside the embedded font.
+- Only TrueType fonts whose licence allows embedding (OS/2 `fsType` not restricted) are embedded;
+  PostScript-outline (CFF) fonts and restricted ones are left out with a notice, as are names no installed
+  font has (like Arial on Linux: a theme default every PowerPoint machine has).
+- Fonts that aren't installed can be given in the config:
+
+```js
+export default {
+  embedFonts: {
+    aliases: { "JetBrains Mono Variable": "JetBrains Mono" },
+    files: { "JetBrains Mono": { regular: "fonts/JetBrainsMono-Regular.ttf", bold: "fonts/JetBrainsMono-Bold.ttf" } },
+  },
+};
+```
 
 ## Config
 

@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { startDeckServer } from "./server.mjs";
 import { loadChromium } from "./browser.mjs";
 import { captureDeck } from "./capture.mjs";
+import { animateVideos as animateSlideVideos, hasFfmpeg, videosToAnimate } from "./animate.mjs";
 import { sceneToSpec, shapesOf, unitsFor } from "./scene.mjs";
 import { deckStyle, layoutOne, groupedBarChart } from "../layout.mjs";
 
@@ -108,6 +109,26 @@ export function uncoveredSignatures(scenes, repeated) {
   return kept;
 }
 
+// Videos LibreOffice Impress can't show (one with slide content over it, a slide's second video)
+// become looping animated pictures (see animate.mjs), unless `mode` is "native". Without ffmpeg they
+// stay videos, with a notice. `deps`: { gif, rate } stand-ins for ffmpeg (tests).
+function animateVideos(scenes, mode, deps = {}) {
+  if (mode === "native") return;
+  const stub = deps.gif ? { gif: deps.gif, rate: deps.rate || (() => 25) } : {};
+  for (const s of scenes) {
+    if (!videosToAnimate(s.nodes).length) continue;
+    if (!stub.gif && !hasFfmpeg()) {
+      console.warn(`Notice: slide ${s.index}: videos LibreOffice can't show stay videos (no ffmpeg to make them animated pictures).`);
+      continue;
+    }
+    for (const r of animateSlideVideos(s, stub)) {
+      const why = r.background ? "has content over it" : "is a second video on its slide (LibreOffice shows one)";
+      if (r.error) console.warn(`Notice: slide ${s.index}: ${r.label} ${why} - stays a video (animated picture failed: ${r.error}).`);
+      else console.warn(`Notice: slide ${s.index}: ${r.label} ${why} - exported as a looping animated picture (${r.width} px, ${r.fps} fps, ${r.seconds} s${r.cut ? " of it" : ""}, ${(r.bytes / 2 ** 20).toFixed(1)} MB; --videos native keeps videos).`);
+    }
+  }
+}
+
 // A slide that couldn't be captured, from the markdown: its own slide laid out alone, numbered as
 // the export's slide `no`. Slidev numbers a slide imported with `src:` within its own file, which
 // the static parser doesn't read, so that one (or one with no markdown slide) is left blank.
@@ -162,6 +183,7 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
   const sceneStyle = { geometry: style.geometry, theme: style.theme, fonts: config.fonts };
 
   const rendered = captured.slides.filter((s) => !s.error);
+  animateVideos(rendered, config.render?.videos ?? "animated", { gif: deps.gif, rate: deps.rate });
   // Resolver charts first: a resolved chart is a chart, never a shared picture on the master.
   for (const s of rendered) {
     for (const node of s.nodes) if (node.kind === "chart" || node.kind === "raster") resolveChart(node, config, style);

@@ -79,18 +79,20 @@ async function captureSlide(page, baseUrl, s, canvas, screenshots) {
   // Again, in case Vite reloaded the page while it settled.
   await hideViteOverlay(page);
   const screenshot = screenshots ? await page.locator(sel).screenshot({ animations: "disabled" }) : null;
+  await videosLoaded(page, sel);
   await page.addScriptTag({ content: EXTRACT });
   const scene = await page.evaluate(({ pageSel, size }) => window.__pptxExtract(document.querySelector(pageSel), size), { pageSel: sel, size: canvas });
   // A picture shows what is behind its element, never what is drawn above it: the slide's
   // pictures are taken without the global top layer over them, the global bottom layer's without
   // the slide either. Those are exported on their own, above the picture.
   for (const [layer, above] of [["bottom", [sel, TOP_LAYER]], [undefined, [TOP_LAYER]], ["top", []]]) {
-    const own = scene.nodes.filter((n) => n.layer === layer && (n.kind === "image" || n.kind === "raster"));
+    const own = scene.nodes.filter((n) => n.layer === layer && (n.kind === "image" || n.kind === "raster" || n.kind === "video"));
     if (!own.length) continue;
     const shown = await hide(page, above);
     try {
       for (const node of own) {
         if (node.kind === "image") await loadImage(page, node);
+        else if (node.kind === "video") await loadVideo(page, node);
         else node.png = await pictureOf(page, node);
       }
     } finally {
@@ -207,6 +209,116 @@ async function loadImage(page, node) {
     }
     Object.assign(node, { kind: "raster", reason: `image not fetched: ${String(err.message || err).split("\n")[0]}`, label: node.alt || node.src, png: await elementShot(page, node.id) });
   }
+}
+
+// Formats PowerPoint plays embedded (others stay pictures of their current frame).
+const VIDEO_FORMATS = { mp4: "mp4", m4v: "mp4", mov: "mov" };
+
+// Waits (up to 8 s) until the slide's videos know their size, so they can be exported as videos.
+async function videosLoaded(page, sel) {
+  await page.evaluate(async (pageSel) => {
+    const vids = [...(document.querySelector(pageSel)?.querySelectorAll("video") || [])];
+    await Promise.all(vids.map((v) => (v.readyState >= 1 ? null : new Promise((ok) => {
+      v.addEventListener("loadedmetadata", ok, { once: true });
+      v.addEventListener("error", ok, { once: true });
+      setTimeout(ok, 8000);
+    }))));
+  }, sel);
+}
+
+// A video's file and its poster for the writer. An autoplaying video is seen playing, not its poster
+// (which may even belong to another of its sources), so its poster is the file's own first frame that
+// shows something; otherwise (or when there is none) the poster attribute's picture, else the frame the
+// element shows. A video that can't be
+// fetched, or that PowerPoint can't play, is a picture of its frame.
+async function loadVideo(page, node) {
+  const ext = VIDEO_FORMATS[(node.src.split(/[?#]/)[0].split(".").pop() || "").toLowerCase()];
+  try {
+    if (!ext) throw new Error("not a format PowerPoint plays embedded");
+    node.data = await fetchBytes(page, node.src);
+    node.ext = ext;
+    if (node.autoplay) node.posterImage = await firstFrame(page, node.src);
+    if (node.poster && !node.posterImage) {
+      try {
+        const data = await fetchBytes(page, node.poster);
+        const t = imageSize(data).type;
+        if (t === "png" || t === "jpg" || t === "gif") node.posterImage = { data, ext: t };
+      } catch {
+        // the element's own frame below
+      }
+    }
+    if (!node.posterImage) node.posterImage = { data: await elementShot(page, node.id), ext: "png" };
+  } catch (err) {
+    delete node.data;
+    Object.assign(node, { kind: "raster", reason: `video not embedded: ${String(err.message || err).split("\n")[0]}`, png: await elementShot(page, node.id) });
+  }
+}
+
+// The first frame of a video file that shows something, as a JPEG, drawn in the page (same origin,
+// so the canvas can be read): tried at 0, 0.5, 1 and 2 s, each once the frame is decoded (a seek
+// can report done before the frame is there, which draws an all-black picture). A frame of one flat
+// colour (a fade-in, a black lead-in) is skipped; null when none shows anything within 15 s.
+async function firstFrame(page, src) {
+  const dataUrl = await page.evaluate(async (url) => {
+    const v = document.createElement("video");
+    v.muted = true;
+    v.playsInline = true;
+    v.preload = "auto";
+    v.style.cssText = "position:fixed;left:0;top:0;width:64px;height:36px;opacity:0;pointer-events:none";
+    document.body.appendChild(v);
+    const wait = (ev, ms) => new Promise((ok, fail) => {
+      v.addEventListener(ev, ok, { once: true });
+      v.addEventListener("error", fail, { once: true });
+      setTimeout(fail, ms);
+    });
+    // resolves once a frame at the current position has been decoded (or after `ms`)
+    const decoded = (ms) => new Promise((ok) => {
+      if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(() => ok());
+      setTimeout(ok, ms);
+    });
+    const draw = (w, h) => {
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      c.getContext("2d").drawImage(v, 0, 0, w, h);
+      return c;
+    };
+    // whether a frame has more than one flat colour: the spread of its luminance on a small copy
+    const shows = () => {
+      const d = draw(32, 18).getContext("2d").getImageData(0, 0, 32, 18).data;
+      let sum = 0, sq = 0, n = 0;
+      for (let i = 0; i < d.length; i += 4, n++) {
+        const y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        sum += y;
+        sq += y * y;
+      }
+      return Math.sqrt(Math.max(0, sq / n - (sum / n) ** 2)) > 4;
+    };
+    try {
+      v.src = url;
+      await wait("loadeddata", 8000);
+      for (const t of [0, 0.5, 1, 2]) {
+        if (Number.isFinite(v.duration) && t > v.duration) break;
+        const seeked = wait("seeked", 3000);
+        const frame = decoded(1500);
+        v.currentTime = t || 0.001;
+        await seeked;
+        await frame;
+        if (shows()) {
+          const c = draw(v.videoWidth, v.videoHeight);
+          return c.toDataURL("image/jpeg", 0.9);
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    } finally {
+      v.removeAttribute("src");
+      v.load();
+      v.remove();
+    }
+  }, src);
+  return dataUrl ? { data: Buffer.from(dataUrl.slice(dataUrl.indexOf(",") + 1), "base64"), ext: "jpg" } : null;
 }
 
 const TOP_LAYER = '[data-pptx-layer="top"]';

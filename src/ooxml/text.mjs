@@ -77,7 +77,8 @@ export function pPrXml(para, ctx, { placeholder = false } = {}) {
     attrs.push(`marL="${emu(para.marL ?? 0.25 * (level + 1))}"`, `indent="${emu(para.indent ?? (bulleted ? -0.2 : 0))}"`);
   }
   if (level > 0) attrs.push(`lvl="${level}"`);
-  if (para.align && para.align !== "l") attrs.push(`algn="${para.align}"`);
+  // A placeholder inherits its layout's alignment (Title Slide centres), so it always says its own.
+  if (para.align && (para.align !== "l" || placeholder)) attrs.push(`algn="${para.align}"`);
 
   // Child order per CT_TextParagraphProperties: lnSpc, spcBef, spcAft, buClr, buSz, buFont, bullet.
   if (para.lineSpacing != null) {
@@ -104,8 +105,8 @@ function paraXml(para, ctx, opts) {
   const runs = para.runs || [];
   const last = runs[runs.length - 1] || {};
   // endParaRPr keeps an empty trailing line (and an empty paragraph) at the run's size/font
-  // instead of PowerPoint's 18pt default.
-  const end = rPrXml({ size: last.size, font: last.font, typeface: last.typeface }, ctx, "a:endParaRPr");
+  // (an empty one at `endSize`) instead of PowerPoint's 18pt default.
+  const end = rPrXml({ size: last.size ?? para.endSize, font: last.font, typeface: last.typeface }, ctx, "a:endParaRPr");
   return `<a:p>${pPrXml(para, ctx, opts)}${runsXml(runs, ctx)}${end}</a:p>`;
 }
 

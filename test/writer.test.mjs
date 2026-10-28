@@ -113,7 +113,7 @@ test("same input gives byte-identical output", async () => {
 
 test("unknown layouts and shape kinds are rejected", async () => {
   await assert.rejects(writePptx([{ layout: "nope" }], DECK), /unknown layout "nope"/);
-  await assert.rejects(writePptx([{ layout: "blank", shapes: [{ kind: "video" }] }], DECK), /Unknown shape kind "video"/);
+  await assert.rejects(writePptx([{ layout: "blank", shapes: [{ kind: "hologram" }] }], DECK), /Unknown shape kind "hologram"/);
 });
 
 test("a slide's title placeholder can carry its own body properties", async () => {

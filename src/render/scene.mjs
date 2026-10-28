@@ -54,8 +54,18 @@ function runOf(r, u, style, opacity) {
   return run;
 }
 
+// A run with space after it (an inline element's margin or padding, `gapAfter`): its last character
+// gets that much more letter spacing, the only space PowerPoint puts between two characters.
+function runsOf(r, u, style, opacity) {
+  const run = runOf(r, u, style, opacity);
+  const chars = [...(r.text || "")];
+  if (!(r.gapAfter > 0) || !chars.length || r.text.endsWith("\n")) return [run];
+  const last = { ...run, text: chars.pop(), spacing: u.pt((r.spacing || 0) + r.gapAfter) };
+  return chars.length ? [{ ...run, text: chars.join("") }, last] : [last];
+}
+
 function textShape(node, u, style) {
-  const para = { runs: node.runs.map((r) => runOf(r, u, style, node.opacity ?? 1)) };
+  const para = { runs: node.runs.flatMap((r) => runsOf(r, u, style, node.opacity ?? 1)) };
   const align = ALIGN[node.align];
   if (align && align !== "l") para.align = align;
   if (node.lineHeight) para.lineSpacing = u.pt(node.lineHeight);
@@ -77,7 +87,7 @@ function listShape(node, u, style) {
     if (it.spaceBefore > 0) para.spaceBefore = u.pt(it.spaceBefore);
     const align = ALIGN[it.align];
     if (align && align !== "l") para.align = align;
-    para.runs = it.runs.map((r) => runOf(r, u, style, node.opacity ?? 1));
+    para.runs = it.runs.flatMap((r) => runsOf(r, u, style, node.opacity ?? 1));
     return para;
   });
   return { kind: "text", ...u.box(node.rect), geometry: "rect", anchor: "t", inset: 0, paras };
@@ -96,8 +106,24 @@ function shadowOf(s, u, style, opacity) {
 }
 
 // A border on only some sides (a blockquote's left rule, a heading's underline) is a thin bar.
+// CSS border styles PowerPoint draws as a dash pattern.
+const DASH = { dashed: "dash", dotted: "sysDot" };
+
 function sideBar(rect, side, u, style, opacity) {
   const t = side.width;
+  if (side.dash) {
+    // a dashed or dotted side is a line along the side's middle, in that pattern
+    const half = t / 2;
+    const r =
+      side.side === "l" ? { x: rect.x + half, y: rect.y, w: 0, h: rect.h }
+      : side.side === "r" ? { x: rect.x + rect.w - half, y: rect.y, w: 0, h: rect.h }
+      : side.side === "t" ? { x: rect.x, y: rect.y + half, w: rect.w, h: 0 }
+      : { x: rect.x, y: rect.y + rect.h - half, w: rect.w, h: 0 };
+    const line = { width: u.pt(t), color: colorOf(side.color, style), dash: DASH[side.dash] };
+    const a = alphaOf(side.color, opacity);
+    if (a !== undefined) line.alpha = a;
+    return { kind: "text", ...u.box(r), geometry: "line", line, paras: [] };
+  }
   const r =
     side.side === "l" ? { x: rect.x, y: rect.y, w: t, h: rect.h }
     : side.side === "r" ? { x: rect.x + rect.w - t, y: rect.y, w: t, h: rect.h }
@@ -209,7 +235,7 @@ function boxShapes(node, u, style) {
       if (a !== undefined) shape.fillAlpha = a;
     }
     if (node.border) {
-      shape.line = { width: u.pt(node.border.width), color: colorOf(node.border.color, style) };
+      shape.line = { width: u.pt(node.border.width), color: colorOf(node.border.color, style), ...(node.border.dash ? { dash: DASH[node.border.dash] } : {}) };
       const a = alphaOf(node.border.color, op);
       if (a !== undefined) shape.line.alpha = a;
     }
@@ -243,11 +269,24 @@ function imageShape(node, u, style) {
   const { rect, crop } = fitImage(node.rect, node.natural, node.fit);
   const shape = { kind: "image", ...u.box(rect), data: node.data, ext: node.ext, alt: node.alt || "" };
   if (crop) shape.crop = crop;
+  if (node.radius > 0) shape.radius = u.inch(node.radius);
   if (node.svg) shape.svg = node.svg;
   const op = node.opacity ?? 1;
-  if (node.border) shape.line = { width: u.pt(node.border.width), color: colorOf(node.border.color, style) };
+  if (node.border) shape.line = { width: u.pt(node.border.width), color: colorOf(node.border.color, style), ...(node.border.dash ? { dash: DASH[node.border.dash] } : {}) };
   if (node.shadow) shape.shadow = shadowOf(node.shadow, u, style, op);
   if (node.rotate) shape.rot = node.rotate;
+  return shape;
+}
+
+// A video: placed and cropped as the page draws it (object-fit), its poster as the picture shown
+// until it plays, starting by itself, looping and muted as the element does.
+function videoShape(node, u) {
+  const { rect, crop } = fitImage(node.rect, node.natural, node.fit);
+  const shape = {
+    kind: "video", ...u.box(rect), data: node.data, ext: node.ext, poster: node.posterImage, alt: node.alt || "",
+    autoplay: !!node.autoplay, loop: !!node.loop, muted: !!node.muted, duration: node.duration,
+  };
+  if (crop) shape.crop = crop;
   return shape;
 }
 
@@ -259,10 +298,13 @@ function tableShape(node, u, style) {
   const op = node.opacity ?? 1;
   const cellOf = (c) => {
     if (c.covered) return { paras: [], hMerge: c.covered.includes("h"), vMerge: c.covered.includes("v") };
-    const para = { runs: c.runs.map((r) => runOf(r, u, style, op)) };
+    const para = { runs: c.runs.flatMap((r) => runsOf(r, u, style, op)) };
     const align = ALIGN[c.align];
     if (align && align !== "l") para.align = align;
     if (c.lineHeight) para.lineSpacing = u.pt(c.lineHeight);
+    // An empty cell (a markdown table's blank header) is as short as the page draws its row: its
+    // empty line would otherwise be 18pt tall and push the row, and the table, down.
+    if (!para.runs.length) Object.assign(para, { endSize: 1, lineSpacing: 1 });
     const out = {
       paras: [para],
       margin: { l: u.inch(c.padding.l), r: u.inch(c.padding.r), t: u.inch(c.padding.t), b: u.inch(c.padding.b) },
@@ -294,7 +336,7 @@ function tableShape(node, u, style) {
 // over the panel box the `pre` itself produced.
 function codeShape(node, u, style) {
   const op = node.opacity ?? 1;
-  const paras = node.lines.map((runs) => ({ lineSpacing: u.pt(node.lineHeight), runs: runs.map((r) => runOf(r, u, style, op)) }));
+  const paras = node.lines.map((runs) => ({ lineSpacing: u.pt(node.lineHeight), runs: runs.flatMap((r) => runsOf(r, u, style, op)) }));
   return { kind: "text", ...u.box(node.rect), geometry: "rect", anchor: "t", inset: 0, wrap: false, paras };
 }
 
@@ -346,6 +388,8 @@ export function shapesOf(node, u, style) {
       return node.data ? [imageShape(node, u, style)] : [];
     case "raster":
       return node.png ? [{ kind: "image", ...u.box(node.rect), data: node.png, ext: "png", alt: node.alt || "" }] : [];
+    case "video":
+      return node.data ? [videoShape(node, u)] : [];
     case "missing":
       return [];
     default:
@@ -404,7 +448,7 @@ export function sceneToSpec(scene, style) {
     spec.shapes.push(...shapesOf(node, u, style));
   }
   if (title) {
-    spec.placeholders.title = textShape(title, u, style).paras;
+    spec.placeholders.title = textShape(title, u, style).paras.map((para) => ({ ...para, align: para.align || "l" }));
     spec.placeholders.titleBox = u.box(titleRectOf(title, scene.canvas.w));
     // The box is measured, so none of the master's insets, bottom anchoring or shrink-to-fit
     // apply; a title that fits on one line in the browser must not wrap in PowerPoint.

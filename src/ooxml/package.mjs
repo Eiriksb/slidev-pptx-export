@@ -22,6 +22,9 @@ export const REL = {
   viewProps: `${OFFICE_REL}/viewProps`,
   tableStyles: `${OFFICE_REL}/tableStyles`,
   image: `${OFFICE_REL}/image`,
+  video: `${OFFICE_REL}/video`,
+  media: "http://schemas.microsoft.com/office/2007/relationships/media",
+  font: `${OFFICE_REL}/font`,
   chart: `${OFFICE_REL}/chart`,
   package: `${OFFICE_REL}/package`,
   hyperlink: `${OFFICE_REL}/hyperlink`,
@@ -59,6 +62,9 @@ const MEDIA_TYPES = {
   jpeg: "image/jpeg",
   gif: "image/gif",
   svg: "image/svg+xml",
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+  fntdata: "application/x-fontdata",
   xlsx: `${SML}.sheet`,
 };
 

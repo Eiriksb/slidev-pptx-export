@@ -317,7 +317,7 @@
 
   function sameStyle(a, b) {
     return a.font === b.font && a.size === b.size && a.bold === b.bold && a.italic === b.italic &&
-      a.underline === b.underline && a.strike === b.strike && a.spacing === b.spacing &&
+      a.underline === b.underline && a.strike === b.strike && a.spacing === b.spacing && !a.gapAfter &&
       sameColor(a.color, b.color) && sameColor(a.highlight, b.highlight);
   }
 
@@ -446,15 +446,16 @@
           const width = px(cs[`border${s}Width`]);
           const style = cs[`border${s}Style`];
           const color = width && style !== "none" && style !== "hidden" ? parseColor(cs[`border${s}Color`]) : null;
-          return { side: "trbl"[i], width, color };
+          // dashed and dotted are kept (PowerPoint draws them natively); double, groove … are drawn solid
+          return { side: "trbl"[i], width, color, ...(style === "dashed" || style === "dotted" ? { dash: style } : {}) };
         })
         .filter((s) => s.color);
-      const uniform = sides.length === 4 && sides.every((s) => s.width === sides[0].width && sameColor(s.color, sides[0].color));
+      const uniform = sides.length === 4 && sides.every((s) => s.width === sides[0].width && sameColor(s.color, sides[0].color) && s.dash === sides[0].dash);
       const rad = cs.borderTopLeftRadius || "0px";
       const radius = rad.endsWith("%") ? (parseFloat(rad) / 100) * Math.min(rc.w, rc.h) : px(rad);
       return {
         fill: parseColor(cs.backgroundColor),
-        border: uniform ? { width: sides[0].width, color: sides[0].color } : null,
+        border: uniform ? { width: sides[0].width, color: sides[0].color, ...(sides[0].dash ? { dash: sides[0].dash } : {}) } : null,
         sides: !uniform && sides.length ? sides : null,
         radius: r2(radius),
         shadow: parseShadow(cs.boxShadow),
@@ -547,6 +548,34 @@
       return false;
     }
 
+    // The one corner radius a picture with a rounded-rectangle shape draws an image with, when that is
+    // how the page cuts it: its own border radius, the same circular one at all four corners; or a
+    // rounded ancestor clipping it whose padding box the image fills, with one radius all round.
+    // 0 when nothing cuts it, null when the cut is something else (one corner, ellipses, a partial overlap).
+    function nativeRadius(el, cs, rc) {
+      const own = radiiOf(cs, rc);
+      let r = 0;
+      if (own.some(([rx, ry]) => rx > 0 || ry > 0)) {
+        if (!own.every(([rx, ry]) => Math.abs(rx - own[0][0]) < 0.5 && Math.abs(ry - rx) < 0.5)) return null;
+        r = own[0][0];
+      }
+      for (let e = el.parentElement; e && e !== pageEl && e !== host; e = e.parentElement) {
+        const ecs = getComputedStyle(e);
+        if (ecs.overflowX === "visible" && ecs.overflowY === "visible") continue;
+        const box = rectOf(e.getBoundingClientRect());
+        const [bt, br, bb, bl] = ["Top", "Right", "Bottom", "Left"].map((side) => px(ecs[`border${side}Width`]));
+        const pad = { x: box.x + bl, y: box.y + bt, w: box.w - bl - br, h: box.h - bt - bb };
+        const inner = radiiOf(ecs, box).map(([rx, ry], i) => [rx - [bl, br, br, bl][i], ry - [bt, bt, bb, bb][i]]);
+        if (!inner.some(([rx, ry]) => rx > 0.5 && ry > 0.5)) continue;
+        const fills = Math.abs(rc.x - pad.x) < 1.5 && Math.abs(rc.y - pad.y) < 1.5 &&
+          Math.abs(rc.x + rc.w - pad.x - pad.w) < 1.5 && Math.abs(rc.y + rc.h - pad.y - pad.h) < 1.5;
+        const uniform = inner.every(([rx, ry]) => Math.abs(rx - inner[0][0]) < 0.5 && Math.abs(ry - rx) < 0.5);
+        if (fills && uniform) r = Math.max(r, inner[0][0]);
+        else if (roundedImage(el, cs, rc)) return null;
+      }
+      return r2(r);
+    }
+
     function rasterReason(el, cs, tag, op, rc) {
       // An inline SVG with nothing in it (Slidev's empty drawing layer) draws only its CSS box.
       if (tag === "svg" && !el.firstElementChild) return null;
@@ -556,7 +585,8 @@
         if (!fmt) return "image format";
         if (op < 0.999) return "image opacity";
         if (fmt === "svg" && el.complete && el.naturalWidth && !svgFits(el, cs, rc)) return "SVG image fit";
-        if (el.complete && el.naturalWidth && roundedImage(el, cs, rc)) return "rounded image";
+        // rounded with one radius all round: a picture with a rounded-rectangle shape (imageNode)
+        if (el.complete && el.naturalWidth && roundedImage(el, cs, rc) && nativeRadius(el, cs, contentBox(el, cs, rc)) === null) return "rounded image";
       }
       // Code is drawn as unwrapped text over its panel, so a block that scrolls inside the panel
       // (the browser clips it) or wraps (the browser breaks lines the text box won't) is a picture.
@@ -640,7 +670,14 @@
           deferred.push(n);
           continue;
         }
+        const start = runs.length;
         collectRuns(n.childNodes, mergeDeco(deco, ccs), highlightOf(n, ccs) || highlight, runs, deferred);
+        // An inline element's horizontal margin, border and padding (a number's margin-right before
+        // its label) is space the text doesn't have: it goes after the last character before it.
+        const side = (k) => (parseFloat(ccs[`margin${k}`]) || 0) + (parseFloat(ccs[`padding${k}`]) || 0) + (parseFloat(ccs[`border${k}Width`]) || 0);
+        const [gapL, gapR] = [side("Left"), side("Right")];
+        if (gapL > 0.5 && start > 0 && runs.length > start) runs[start - 1].gapAfter = r2((runs[start - 1].gapAfter || 0) + gapL * unit);
+        if (gapR > 0.5 && runs.length > start) runs[runs.length - 1].gapAfter = r2((runs[runs.length - 1].gapAfter || 0) + gapR * unit);
       }
     }
 
@@ -715,8 +752,22 @@
           const cb = contentBox(el, cs, box);
           rect = { x: cb.x, y: m.rect.y, w: cb.w, h: m.rect.h };
         }
+        let lineHeight = lineHeightOf(cs, m);
+        // One line set taller than its glyphs (line-height 2, or an inline-block icon beside it): the
+        // browser centres the glyphs in the line, PowerPoint and LibreOffice put them low in an exact line
+        // spacing. A single line has no other line to keep its distance from, so its spacing is its glyphs'
+        // own height, from the box's top at the glyphs': the text lands where the page draws it.
+        if (!multi && !rotate && lineHeight > rect.h + 1) lineHeight = r2(rect.h);
+        // Several lines with spacing taller than the font: PowerPoint sets each baseline ~80% down its exact
+        // line, the browser ~0.95em below the glyphs' top (where the box starts); the box moves up by the
+        // difference, so the lines land where the page draws them.
+        if (multi && !rotate && runs.length) {
+          const size = Math.max(...runs.map((r) => r.size || 0));
+          const shift = 0.8 * lineHeight - 0.95 * size;
+          if (size > 0 && shift > 0.5) rect = { ...rect, y: r2(rect.y - shift), h: r2(rect.h + shift) };
+        }
         if (onCanvas(rect)) {
-          nodes.push({ kind: "text", rect, role: el === titleEl ? "title" : "body", align: textAlign(cs), lineHeight: lineHeightOf(cs, m), singleLine: !multi, runs, opacity: op, rotate });
+          nodes.push({ kind: "text", rect, role: el === titleEl ? "title" : "body", align: textAlign(cs), lineHeight, singleLine: !multi, runs, opacity: op, rotate });
         }
       }
       for (const d of deferred) walk(d, op);
@@ -743,6 +794,170 @@
       flush();
     }
 
+    // CSS counters as the page numbers them: `name`'s value for `el` (the counter-reset that scopes it,
+    // then every counter-increment in document order up to `el` itself, as the ::before of `el` sees
+    // it), or a list item's own number for the built-in `list-item`.
+    function counterValue(el, name) {
+      if (name === "list-item") {
+        const li = el.closest("li");
+        if (!li) return 1;
+        if (li.value) return li.value;
+        const list = li.parentElement;
+        let n = list && list.localName === "ol" && list.hasAttribute("start") ? list.start : 1;
+        if (list && list.reversed) n = list.querySelectorAll(":scope > li").length;
+        for (let e = li.previousElementSibling; e; e = e.previousElementSibling) if (e.localName === "li") n += list && list.reversed ? -1 : 1;
+        return n;
+      }
+      const amounts = (value, dflt) => {
+        const out = new Map();
+        const t = String(value || "none").trim().split(/\s+/);
+        for (let k = 0; k < t.length; k++) {
+          if (t[k] === "none" || /^-?\d+$/.test(t[k])) continue;
+          const v = /^-?\d+$/.test(t[k + 1] || "") ? parseInt(t[k + 1], 10) : dflt;
+          out.set(t[k], v);
+        }
+        return out;
+      };
+      let root = null;
+      let start = 0;
+      for (let e = el; e && !root; e = e.parentElement) {
+        // a reset on the element itself or on an earlier sibling of it (or of an ancestor) scopes the counter
+        for (let s = e; s; s = s.previousElementSibling) {
+          const r = amounts(getComputedStyle(s).counterReset, 0);
+          if (r.has(name)) {
+            root = s;
+            start = r.get(name);
+            break;
+          }
+        }
+      }
+      let value = start;
+      const scope = root ? root.parentElement || root : document.body;
+      const walker = document.createTreeWalker(scope, NodeFilter.SHOW_ELEMENT);
+      let reached = false;
+      for (let n = root || walker.currentNode; n; n = walker.nextNode()) {
+        if (!reached && root) {
+          walker.currentNode = root;
+          reached = true;
+        }
+        const inc = amounts(getComputedStyle(n).counterIncrement, 1);
+        if (inc.has(name)) value += inc.get(name);
+        if (n === el) break;
+      }
+      return value;
+    }
+
+    function formatCounter(n, style) {
+      const alpha = (v, base) => {
+        let out = "";
+        for (let x = v; x > 0; x = Math.floor((x - 1) / 26)) out = String.fromCharCode(base + ((x - 1) % 26)) + out;
+        return out || String(v);
+      };
+      const roman = (v) => {
+        const map = [[1000, "m"], [900, "cm"], [500, "d"], [400, "cd"], [100, "c"], [90, "xc"], [50, "l"], [40, "xl"], [10, "x"], [9, "ix"], [5, "v"], [4, "iv"], [1, "i"]];
+        let out = "";
+        for (const [k, r] of map) while (v >= k) { out += r; v -= k; }
+        return out;
+      };
+      switch (style) {
+        case "none": return "";
+        case "decimal-leading-zero": return n < 10 && n >= 0 ? `0${n}` : String(n);
+        case "lower-alpha": case "lower-latin": return alpha(n, 97);
+        case "upper-alpha": case "upper-latin": return alpha(n, 65);
+        case "lower-roman": return n > 0 && n < 4000 ? roman(n) : String(n);
+        case "upper-roman": return n > 0 && n < 4000 ? roman(n).toUpperCase() : String(n);
+        default: return String(n);
+      }
+    }
+
+    // The text a pseudo-element's `content` makes: quoted strings, counter(), counters(), attr();
+    // quotes and images give nothing.
+    function pseudoText(el, content) {
+      let out = "";
+      const re = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|counters?\(\s*([\w-]+)\s*(?:,\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'))?\s*(?:,\s*([\w-]+)\s*)?\)|attr\(\s*([\w-]+)\s*\)/g;
+      const unquote = (q) => q.replace(/\\([0-9a-fA-F]{1,6})\s?/g, (_, h) => String.fromCodePoint(parseInt(h, 16))).replace(/\\(.)/g, "$1");
+      for (const m of content.matchAll(re)) {
+        if (m[1] != null) out += unquote(m[1]);
+        else if (m[2] != null) out += unquote(m[2]);
+        else if (m[3]) out += formatCounter(counterValue(el, m[3]), m[5] || "decimal");
+        else if (m[6]) out += el.getAttribute(m[6]) || "";
+      }
+      return out;
+    }
+
+    // The padding box of the element a position:absolute pseudo-element of `el` is placed in: `el` itself
+    // when it is positioned, else its nearest positioned ancestor (the page when none is).
+    function containingBlock(el) {
+      for (let e = el; e && e !== pageEl.parentElement; e = e.parentElement) {
+        const ecs = getComputedStyle(e);
+        if (ecs.position !== "static" || e === pageEl) {
+          const r = rectOf(e.getBoundingClientRect());
+          const l = px(ecs.borderLeftWidth);
+          const t = px(ecs.borderTopWidth);
+          return { x: r.x + l, y: r.y + t, w: r.w - l - px(ecs.borderRightWidth), h: r.h - t - px(ecs.borderBottomWidth) };
+        }
+      }
+      return null;
+    }
+
+    // An element's ::before / ::after: a filled or bordered box with a size of its own (a coloured square
+    // before a label, a numbered circle before a step), and the text its content makes (a counter, a
+    // symbol) in a native text box over it. The page doesn't say where a pseudo-element is, so it is
+    // placed as the layout puts it: position:absolute by its left/top/right/bottom in its containing
+    // block; otherwise at the start (::before) or end (::after) of the content box, centred in a flex
+    // row that centres its items, else on the first line of text. An unsized one with only text
+    // (a "→" in the flow) is left to the text around it.
+    function pseudoNodes(el, cs, rc, op) {
+      for (const which of ["::before", "::after"]) {
+        const ps = getComputedStyle(el, which);
+        if (!ps.content || ps.content === "none" || ps.content === "normal" || ps.display === "none") continue;
+        if (ps.visibility === "hidden" || parseFloat(ps.opacity) === 0 || ps.position === "fixed") continue;
+        const w = px(ps.width);
+        const h = px(ps.height);
+        if (!(w > 0 && h > 0)) continue;
+        let x;
+        let y;
+        if (ps.position === "absolute") {
+          const cb = containingBlock(el);
+          if (!cb) continue;
+          const set = (v) => v && v !== "auto";
+          x = set(ps.left) ? cb.x + px(ps.left) + px(ps.marginLeft) : set(ps.right) ? cb.x + cb.w - px(ps.right) - w - px(ps.marginRight) : contentBox(el, cs, rc).x;
+          y = set(ps.top) ? cb.y + px(ps.top) + px(ps.marginTop) : set(ps.bottom) ? cb.y + cb.h - px(ps.bottom) - h - px(ps.marginBottom) : contentBox(el, cs, rc).y;
+        } else {
+          const cb = contentBox(el, cs, rc);
+          const flexRow = /flex/.test(cs.display) && !/column/.test(cs.flexDirection);
+          y = cb.y;
+          if (flexRow && cs.alignItems === "center") y = cb.y + (cb.h - h) / 2;
+          else {
+            const m = measure([...el.childNodes]);
+            if (m) y = m.firstTop + (lineHeightOf(cs, m) - h) / 2;
+          }
+          x = which === "::before" ? cb.x + px(ps.marginLeft) : cb.x + cb.w - w - px(ps.marginRight);
+          // in a flex row it sits one gap before (after) the text, wherever justify-content puts that
+          if (flexRow) {
+            const m = measure([...el.childNodes]);
+            const gap = px(cs.columnGap) || 0;
+            if (m) x = which === "::before" ? m.rect.x - gap - w - px(ps.marginRight) : m.rect.x + m.rect.w + gap + px(ps.marginLeft);
+          }
+        }
+        const prect = { x: r2(x), y: r2(y), w: r2(w), h: r2(h) };
+        if (!onCanvas(prect)) continue;
+        const pop = op * (parseFloat(ps.opacity) || 1);
+        const d = decoration(ps, prect);
+        if (d.fill || d.border || d.sides) nodes.push({ kind: "box", rect: prect, ...d, opacity: pop });
+        const text = transformText(pseudoText(el, ps.content), ps).trim();
+        if (text) {
+          // the text on one line, centred in the box's height the way a line-height equal to it does
+          const run = { ...runStyle(ps, { underline: false, strike: false }, null, unit), text };
+          const lh = r2(run.size * 1.2);
+          const tl = px(ps.borderLeftWidth) + px(ps.paddingLeft);
+          const tr = px(ps.borderRightWidth) + px(ps.paddingRight);
+          const trect = { x: r2(prect.x + tl), y: r2(prect.y + (prect.h - lh) / 2), w: r2(Math.max(1, prect.w - tl - tr)), h: lh };
+          nodes.push({ kind: "text", rect: trect, role: "body", align: textAlign(ps), lineHeight: lh, singleLine: true, runs: [run], opacity: pop });
+        }
+      }
+    }
+
     function boxNode(el, cs, rc, rotate, op) {
       if (el === pageEl || !onCanvas(rc)) return;
       const d = decoration(cs, rc);
@@ -760,6 +975,35 @@
       }
     }
 
+    // A <video> PowerPoint can play as it is drawn: loaded (its size known), not transformed, filtered,
+    // masked, clipped or blended (those stay pictures of their current frame). Its file and poster are
+    // fetched by capture.mjs; `fit` and `natural` crop or letterbox it the way the page does.
+    function videoNode(el, cs, rc, op) {
+      const src = el.currentSrc || el.src;
+      if (!src || !el.videoWidth || !el.videoHeight) return false;
+      if (transformOf(cs) || (cs.filter && cs.filter !== "none") || (cs.mixBlendMode && cs.mixBlendMode !== "normal")) return false;
+      const mask = cs.maskImage || cs.webkitMaskImage;
+      if ((mask && mask !== "none") || (cs.clipPath && cs.clipPath !== "none")) return false;
+      if (!onCanvas(rc)) return true;
+      nodes.push({
+        kind: "video", id: mark(el), rect: contentBox(el, cs, rc), src, poster: el.poster || null,
+        fit: cs.objectFit || "contain", natural: { w: el.videoWidth, h: el.videoHeight },
+        duration: Number.isFinite(el.duration) ? el.duration : null, loop: el.loop, muted: el.muted,
+        autoplay: el.autoplay || slidevAutoplay(el), alt: el.getAttribute("aria-label") || el.getAttribute("title") || "", opacity: op,
+        label: labelOf(el),
+      });
+      return true;
+    }
+
+    // <SlidevVideo autoplay> starts its video from code when the slide is shown, not through the
+    // element's autoplay attribute; the component behind the element (Vue's dev build, which Slidev's
+    // dev server runs) says whether it does.
+    function slidevAutoplay(el) {
+      const c = el.__vueParentComponent;
+      const name = c && c.type && (c.type.__name || c.type.name || "");
+      return !!(c && /SlidevVideo/.test(name) && c.props && c.props.autoplay);
+    }
+
     function imageNode(el, cs, rc, rotate, op) {
       const src = el.currentSrc || el.src;
       if (!el.complete || !el.naturalWidth) {
@@ -768,18 +1012,21 @@
       }
       if (!onCanvas(rc)) return;
       const d = decoration(cs, rc);
+      const radius = nativeRadius(el, cs, contentBox(el, cs, rc)) || 0;
       nodes.push({
-        kind: "image", id: mark(el), rect: contentBox(el, cs, rc), src, format: formatOf(src), fit: cs.objectFit || "fill",
+        kind: "image", id: mark(el), rect: contentBox(el, cs, rc), src, format: formatOf(src), fit: cs.objectFit || "fill", radius,
         natural: { w: el.naturalWidth, h: el.naturalHeight }, alt: el.alt || "", border: d.border, shadow: d.shadow, opacity: op, rotate,
       });
     }
 
     function collectItems(listEl, box, level, items, op) {
       let first = true;
+      let number = listEl.localName === "ol" ? listEl.start || 1 : 1;
       for (const li of listEl.children) {
         if (li.localName !== "li") continue;
         const lcs = getComputedStyle(li);
         if (lcs.display === "none" || lcs.visibility === "hidden" || parseFloat(lcs.opacity) === 0) continue;
+        pseudoNodes(li, lcs, rectOf(li.getBoundingClientRect()), op); // a numbered badge, a custom marker
         const segment = [];
         const nested = [];
         const blocks = [];
@@ -815,9 +1062,17 @@
             lineHeight, align: textAlign(lcs), runs, lastTop: m ? m.lastTop : lr.y,
           };
           if (marker === "number" && first) item.start = listEl.localName === "ol" ? listEl.start || 1 : 1;
+          // An outside marker is drawn left of the text, past the list's own box when its padding is narrow:
+          // what it takes ("1. ", "• ") at the marker's font, so the list can be given that room.
+          if (marker !== "none" && lcs.listStylePosition !== "inside") {
+            const mcs = getComputedStyle(li, "::marker");
+            probe.font = `${mcs.fontWeight} ${mcs.fontSize} ${mcs.fontFamily}`;
+            item.markerWidth = r2(probe.measureText(marker === "number" ? `${number}. ` : "\u2022 ").width * unit);
+          }
           items.push(item);
           first = false;
         }
+        if (marker === "number") number++;
         for (const n of nested) collectItems(n, box, level + 1, items, op);
         for (const b of [...blocks, ...deferred]) walk(b, op);
       }
@@ -826,7 +1081,12 @@
     function listNode(listEl, box, op) {
       const items = [];
       collectItems(listEl, box, 0, items, op);
-      if (items.length && onCanvas(box)) nodes.push({ kind: "list", rect: box, items: items.map(({ lastTop, ...it }) => it), opacity: op });
+      // Markers wider than the room left of their text (a list with little padding draws them in its margin):
+      // the text box starts that much further left, so PowerPoint's hanging number fits before the text.
+      const short = Math.max(0, ...items.map((it) => (it.markerWidth || 0) - it.indent));
+      const rect = short > 0.5 ? { ...box, x: r2(box.x - short), w: r2(box.w + short) } : box;
+      if (short > 0.5) for (const it of items) it.indent = r2(it.indent + short);
+      if (items.length && onCanvas(box)) nodes.push({ kind: "list", rect, items: items.map(({ lastTop, markerWidth, ...it }) => it), opacity: op });
     }
 
     // The opacity an element is drawn with inside `root`: the product of its own and its ancestors'
@@ -928,6 +1188,13 @@
         const { runs, m, blocks } = cellContent(p.td);
         later.push(...blocks);
         const n = (prop) => px(cs[prop]);
+        // Text after an inline-block drawn on its own (a bar, an icon) starts where the page has it,
+        // not at the cell's padding: the left inset grows to the text's measured start.
+        let padL = n("paddingLeft");
+        if (m && blocks.length && !["center", "right"].includes(textAlign(cs))) {
+          const cellX = rectOf(p.td.getBoundingClientRect()).x + n("borderLeftWidth");
+          padL = Math.max(padL, r2(m.rect.x - cellX));
+        }
         const borders = cellBorders(cs);
         if (collapsed) {
           // With collapsed borders a row's rules (Slidev's `tr { border-bottom }`) are drawn along the
@@ -940,11 +1207,20 @@
         // The cell's own background, else the nearest row's or row group's behind it.
         let fill = null;
         for (let e = p.td; e && e !== table && !fill; e = e.parentElement) fill = parseColor(getComputedStyle(e).backgroundColor);
+        // A translucent rule is the colour the page shows, over the cell and what is behind the table:
+        // LibreOffice draws table borders without their alpha (a faint line comes out solid white).
+        const under = colorBehind(p.td, false);
+        if (under) {
+          const base = fill ? composite(fill, under) : under;
+          for (const side of Object.keys(borders)) {
+            if (borders[side].color.alpha < 0.999) borders[side] = { ...borders[side], color: composite(borders[side].color, base) };
+          }
+        }
         cells[p.r][p.c] = {
           runs, align: textAlign(cs), valign: cs.verticalAlign,
           lineHeight: m ? lineHeightOf(cs, m) : r2(px(cs.fontSize) * 1.2),
           fill, borders,
-          padding: { t: n("paddingTop"), r: n("paddingRight"), b: n("paddingBottom"), l: n("paddingLeft") },
+          padding: { t: n("paddingTop"), r: n("paddingRight"), b: n("paddingBottom"), l: padL },
           colspan: p.cspan, rowspan: p.rspan,
         };
       }
@@ -1242,6 +1518,7 @@
       }
       const r = el.getBoundingClientRect();
       const rc = rectOf(r);
+      if (tag === "video" && videoNode(el, cs, rc, op)) return;
       const reason = rasterReason(el, cs, tag, op, rc);
       if (reason) {
         if (!onCanvas(rc)) return;
@@ -1277,6 +1554,7 @@
         return;
       }
       boxNode(el, cs, box, rotate, op);
+      if (!rotate) pseudoNodes(el, cs, box, op);
       if (tag === "ul" || tag === "ol") {
         listNode(el, box, op);
         return;

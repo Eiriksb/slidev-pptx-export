@@ -32,7 +32,8 @@ test("the first title node fills the title placeholder at its measured box; the 
   // A one-line title gets room to spare up to the mirrored right margin (980 - 2 x 54 = 872).
   assert.deepEqual(spec.placeholders.titleBox, box({ ...titleRect, w: 872 }));
   assert.deepEqual(spec.placeholders.titleBody, { wrap: false, inset: 0, anchor: "t", autofit: "none" });
-  assert.deepEqual(spec.placeholders.title, [{ lineSpacing: pt(40), runs: [{ text: "Card row", size: pt(36), font: "heading", b: true, color: "dk1" }] }]);
+  // left-aligned stated outright: a placeholder would inherit its layout's (Title Slide centres)
+  assert.deepEqual(spec.placeholders.title, [{ align: "l", lineSpacing: pt(40), runs: [{ text: "Card row", size: pt(36), font: "heading", b: true, color: "dk1" }] }]);
   assert.equal(spec.shapes.length, 1);
   const [eyebrow] = spec.shapes;
   assert.deepEqual(eyebrow, {

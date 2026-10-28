@@ -6,9 +6,10 @@ import { readFileSync } from "node:fs";
 import { extname } from "node:path";
 import { createHash } from "node:crypto";
 import { Package, REL, CT } from "./package.mjs";
+import { esc } from "./xml.mjs";
 import { themeXml } from "./theme.mjs";
 import { layoutDefs, layoutXml, masterXml } from "./master.mjs";
-import { placeholderXml, shapeXml, pictureXml, slideXml, graphicFrameXml, backgroundXml } from "./shapes.mjs";
+import { placeholderXml, shapeXml, pictureXml, slideXml, graphicFrameXml, backgroundXml, timingXml } from "./shapes.mjs";
 import { presentationXml, presPropsXml, viewPropsXml, appXml, coreXml } from "./presentation.mjs";
 import { TABLE_URI, tableXml, tableStylesXml } from "./table.mjs";
 import { CHART_URI, chartXml, chartRefXml } from "./chart.mjs";
@@ -20,7 +21,9 @@ const MASTER = "/ppt/slideMasters/slideMaster1.xml";
 const THEME = "/ppt/theme/theme1.xml";
 const NOTES_MASTER = "/ppt/notesMasters/notesMaster1.xml";
 
-// Each distinct image is stored once, however many slides (or the master) use it.
+const VIDEO_EXTS = new Set(["mp4", "mov"]);
+
+// Each distinct image (and video) is stored once, however many slides (or the master) use it.
 class MediaStore {
   constructor(pkg) {
     this.pkg = pkg;
@@ -34,7 +37,7 @@ class MediaStore {
     const ext = (fromFile ? extname(source).slice(1) : source.ext).toLowerCase().replace("jpeg", "jpg");
     const key = `${createHash("sha1").update(buf).digest("hex")}.${ext}`;
     if (!this.parts.has(key)) {
-      const part = `/ppt/media/image${this.parts.size + 1}.${ext}`;
+      const part = `/ppt/media/${VIDEO_EXTS.has(ext) ? "media" : "image"}${this.parts.size + 1}.${ext}`;
       this.pkg.addMedia(part, buf);
       this.parts.set(key, part);
     }
@@ -50,7 +53,15 @@ async function shapeToXml(shape, id, env) {
     case "image": {
       const rId = pkg.rel(part, media.add(shape.path ?? { data: shape.data, ext: shape.ext }), REL.image);
       const svgRId = shape.svg ? pkg.rel(part, media.add({ data: shape.svg, ext: "svg" }), REL.image) : null;
-      return pictureXml({ id, name: `Picture ${id}`, descr: shape.alt, rId, svgRId, box: shape, crop: shape.crop, line: shape.line, shadow: shape.shadow });
+      return pictureXml({ id, name: `Picture ${id}`, descr: shape.alt, rId, svgRId, box: shape, crop: shape.crop, line: shape.line, shadow: shape.shadow, radius: shape.radius });
+    }
+    case "video": {
+      // one file, two relationships: the linked video (a:videoFile) and the embedded media (p14:media)
+      const file = media.add({ data: shape.data, ext: shape.ext });
+      const video = { linkRId: pkg.rel(part, file, REL.video), embedRId: pkg.rel(part, file, REL.media) };
+      const rId = pkg.rel(part, media.add(shape.poster), REL.image);
+      env.videos.push({ spid: id, autoplay: shape.autoplay, loop: shape.loop, muted: shape.muted, duration: shape.duration });
+      return pictureXml({ id, name: `Video ${id}`, descr: shape.alt, rId, box: shape, crop: shape.crop, video });
     }
     case "table":
       return graphicFrameXml({ id, name: `Table ${id}`, box: shape, uri: TABLE_URI, inner: tableXml(shape, ctx) });
@@ -67,6 +78,52 @@ async function shapeToXml(shape, id, env) {
     default:
       throw new Error(`Unknown shape kind ${JSON.stringify(shape.kind)}`);
   }
+}
+
+const FONT_STYLES = ["regular", "bold", "italic", "boldItalic"];
+
+// Fonts carried in the file: every font name written so far (theme, master, layouts, slides, notes)
+// that `resolve` finds embeddable is renamed to the family it found (a web font's name becomes the
+// installed family's, the name inside the embedded font) and its styles are added as
+// /ppt/fonts/fontN.fntdata. Theme references (+mj-lt ...) and names it can't find are left as they are.
+function embedFonts(pkg, resolve, notice = (msg) => console.warn(msg)) {
+  const names = new Set();
+  for (const [, part] of pkg.parts) {
+    if (typeof part.data !== "string") continue;
+    for (const m of part.data.matchAll(/typeface="([^"+][^"]*)"/g)) names.add(m[1].replace(/&amp;/g, "&"));
+  }
+  const families = new Map(); // family -> rIds per style
+  const rename = new Map();
+  let n = 0;
+  for (const name of [...names].sort()) {
+    const found = resolve(name);
+    if (!found) {
+      notice(`Notice: font "${name}" not embedded: no installed font of that family.`);
+      continue;
+    }
+    for (const note of found.notes) notice(`Notice: font "${name}": ${note}`);
+    if (!found.fonts.regular) continue;
+    if (found.family !== name) rename.set(name, found.family);
+    if (families.has(found.family)) continue;
+    const rIds = {};
+    for (const style of FONT_STYLES) {
+      if (!found.fonts[style]) continue;
+      const part = `/ppt/fonts/font${++n}.fntdata`;
+      pkg.addMedia(part, found.fonts[style]);
+      rIds[style] = pkg.rel(PRES, part, REL.font);
+    }
+    families.set(found.family, rIds);
+  }
+  if (rename.size) {
+    for (const [, part] of pkg.parts) {
+      if (typeof part.data !== "string") continue;
+      part.data = part.data.replace(/typeface="([^"]*)"/g, (m, f) => {
+        const to = rename.get(f.replace(/&amp;/g, "&"));
+        return to ? `typeface="${esc(to)}"` : m;
+      });
+    }
+  }
+  return [...families].map(([typeface, rIds]) => ({ typeface, ...rIds }));
 }
 
 export async function writePptx(slides, deck) {
@@ -97,7 +154,7 @@ export async function writePptx(slides, deck) {
   const logo = deck.logo ? { rId: pkg.rel(MASTER, media.add(deck.logo.path), REL.image), box: deck.logo.box } : null;
   // Render mode can put elements every slide shares (a footer logo) on the master. Their ids
   // follow the master's own title (2), body (3) and logo (4).
-  const masterEnv = { pkg, part: MASTER, media, ctx, counters };
+  const masterEnv = { pkg, part: MASTER, media, ctx, counters, videos: [] };
   let extra = "";
   let masterShapeId = 5;
   for (const shape of deck.masterShapes || []) extra += await shapeToXml(shape, masterShapeId++, masterEnv);
@@ -123,7 +180,7 @@ export async function writePptx(slides, deck) {
     if (!layout) throw new Error(`Slide ${i + 1}: unknown layout ${JSON.stringify(spec.layout)}`);
     pkg.rel(part, layout.part, REL.slideLayout);
     const sctx = { ...ctx, link: (url) => pkg.rel(part, url, REL.hyperlink, { external: true }) };
-    const env = { pkg, part, media, ctx: sctx, counters };
+    const env = { pkg, part, media, ctx: sctx, counters, videos: [] };
 
     let nextId = 2;
     let xml = "";
@@ -155,7 +212,7 @@ export async function writePptx(slides, deck) {
     let bg = "";
     if (spec.background?.image) bg = backgroundXml(spec.background, pkg.rel(part, media.add(spec.background.image), REL.image));
     else if (spec.background?.color || spec.background?.gradient) bg = backgroundXml(spec.background);
-    pkg.addXml(part, CT.slide, slideXml(xml, bg));
+    pkg.addXml(part, CT.slide, slideXml(xml, bg, timingXml(env.videos)));
     if (spec.notes) {
       const notesPart = `/ppt/notesSlides/notesSlide${i + 1}.xml`;
       pkg.addXml(notesPart, CT.notesSlide, notesSlideXml(spec.notes, ctx));
@@ -167,6 +224,8 @@ export async function writePptx(slides, deck) {
     slideRefs.push({ id: 256 + i, rId: pkg.rel(PRES, part, REL.slide) });
   }
 
+  const embedded = deck.fontResolver ? embedFonts(pkg, deck.fontResolver, deck.onFontNotice) : [];
+
   pkg.rel(PRES, THEME, REL.theme);
   for (const [name, type, rel, xml] of [
     ["/ppt/presProps.xml", CT.presProps, REL.presProps, presPropsXml()],
@@ -177,7 +236,7 @@ export async function writePptx(slides, deck) {
     pkg.rel(PRES, name, rel);
   }
   pkg.addXml(PRES, CT.presentation, presentationXml({
-    masterId, masterRId, notesMasterRId, slides: slideRefs,
+    masterId, masterRId, notesMasterRId, slides: slideRefs, embeddedFonts: embedded,
     width: deck.geometry.width, height: deck.geometry.height,
   }));
   pkg.addXml("/docProps/core.xml", CT.coreProps, coreXml({ title: deck.title, author: deck.author, date: deck.timestamps ? new Date() : null }));

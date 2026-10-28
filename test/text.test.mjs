@@ -64,6 +64,11 @@ test("runs: size, bold, italic, spacing, color, theme fonts, mono, link", () => 
   assert.match(xml, /<a:latin typeface="\+mn-lt"\/><a:ea typeface="\+mn-ea"\/><a:cs typeface="\+mn-cs"\/><a:hlinkClick r:id="rId7"\/><\/a:rPr><a:t>l<\/a:t>/);
 });
 
+test("b: false is written as b=\"0\" (regular text under a bold title style); an unset b inherits", () => {
+  assert.equal(rPrXml({ text: "x", b: false }, ctx), '<a:rPr lang="en-US" b="0" dirty="0"/>');
+  assert.equal(rPrXml({ text: "x" }, ctx), '<a:rPr lang="en-US" dirty="0"/>');
+});
+
 test("newlines become a:br and text is escaped", () => {
   const xml = txBodyXml([{ runs: [{ text: "a < b\nc & d" }] }], ctx, {});
   assert.match(xml, /<a:t>a &lt; b<\/a:t><\/a:r><a:br><a:rPr lang="en-US" dirty="0"\/><\/a:br><a:r><a:rPr lang="en-US" dirty="0"\/><a:t>c &amp; d<\/a:t>/);

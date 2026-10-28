@@ -30,7 +30,9 @@ function typefaceXml(name) {
 export function rPrXml(run, ctx, tag = "a:rPr") {
   let attrs = ` lang="${esc(ctx.lang)}"`;
   if (run.size) attrs += ` sz="${Math.min(400000, Math.max(100, pt100(run.size)))}"`;
+  // b: false says "regular" outright, for text whose placeholder style is bold (a title)
   if (run.b) attrs += ' b="1"';
+  else if (run.b === false) attrs += ' b="0"';
   if (run.i) attrs += ' i="1"';
   if (run.u) attrs += ' u="sng"';
   if (run.strike) attrs += ' strike="sngStrike"';

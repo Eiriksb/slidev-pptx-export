@@ -7,6 +7,7 @@ import { themeColors } from "../src/colors.mjs";
 import { writePptx } from "../src/ooxml/index.mjs";
 import { DECK, PIC } from "./deck.mjs";
 import { lintPackage } from "./lint.mjs";
+import { unzip } from "./helpers.mjs";
 
 const STYLE = {
   geometry: slideGeometry({ width: 13.333, height: 7.5, marginX: 0.6 }),
@@ -139,6 +140,15 @@ test("a title drawn first has no titleZ", () => {
   const card = { kind: "box", rect: { x: 0, y: 0, w: 100, h: 100 }, fill: C("EEF4F0"), border: null, sides: null, radius: 0, shadow: null, opacity: 1 };
   const spec = sceneToSpec(scene([text([run("Title", { size: 36 })], { role: "title" }), card]), STYLE);
   assert.equal("titleZ" in spec.placeholders, false);
+});
+
+test("a regular-weight title says so: the title placeholder would inherit the master's bold title style", async () => {
+  const spec = sceneToSpec(scene([text([run("Release notes", { size: 36 }), run(" 0.4", { size: 36, bold: true })], { role: "title" })]), STYLE);
+  assert.deepEqual(spec.placeholders.title[0].runs.map((r) => r.b), [false, true]);
+  const files = await unzip(await writePptx([spec], { ...DECK, logo: null }));
+  const title = files.text("ppt/slides/slide1.xml").match(/<p:sp>(?:(?!<\/p:sp>).)*type="title".*?<\/p:sp>/)[0];
+  assert.match(title, /<a:rPr [^>]*b="0"[^>]*>(?:(?!<\/a:rPr>).)*<\/a:rPr><a:t>Release notes<\/a:t>/);
+  assert.match(title, /<a:rPr [^>]*b="1"[^>]*>(?:(?!<\/a:rPr>).)*<\/a:rPr><a:t> 0.4<\/a:t>/);
 });
 
 test("table nodes become plain native tables with per-cell formatting and merges", () => {

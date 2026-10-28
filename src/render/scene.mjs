@@ -448,7 +448,13 @@ export function sceneToSpec(scene, style) {
     spec.shapes.push(...shapesOf(node, u, style));
   }
   if (title) {
-    spec.placeholders.title = textShape(title, u, style).paras.map((para) => ({ ...para, align: para.align || "l" }));
+    // The placeholder would inherit its layout's alignment (Title Slide centres) and the master's
+    // bold title style, so the rendered alignment and weight are stated outright.
+    spec.placeholders.title = textShape(title, u, style).paras.map((para) => ({
+      ...para,
+      align: para.align || "l",
+      runs: para.runs.map((run) => ({ ...run, b: run.b === true })),
+    }));
     spec.placeholders.titleBox = u.box(titleRectOf(title, scene.canvas.w));
     // The box is measured, so none of the master's insets, bottom anchoring or shrink-to-fit
     // apply; a title that fits on one line in the browser must not wrap in PowerPoint.

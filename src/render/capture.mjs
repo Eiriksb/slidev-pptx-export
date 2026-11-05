@@ -15,27 +15,9 @@ export async function captureDeck({ baseUrl, browser: given = null, chromium, ti
   try {
     page = await browser.newPage({ viewport: { width: 980, height: 552 }, deviceScaleFactor: 2 });
     page.setDefaultTimeout(timeout);
-    await open(page, `${baseUrl}/1?print`);
-    try {
-      await page.waitForFunction(() => window.__slidev__?.nav?.total > 0 && !!document.querySelector(".slidev-page"));
-    } catch {
-      throw new Error(await whyNoDeck(page, timeout, slidevVersion));
-    }
-    const info = await page.evaluate(() => {
-      const s = window.__slidev__;
-      return {
-        canvasWidth: s.configs.canvasWidth || 980,
-        aspectRatio: s.configs.aspectRatio || 16 / 9,
-        // sourceIndex counts within the slide's own markdown file (filepath; an imported `src:` file
-        // has its own).
-        slides: s.nav.slides.map((r) => ({ no: r.no, sourceIndex: r.meta?.slide?.sourceIndex ?? null, filepath: r.meta?.slide?.filepath || null, notes: r.meta?.slide?.note || null })),
-      };
-    });
-    // Slidev's own slide height: Math.ceil(canvasWidth / aspectRatio) (980 x 16/9 -> 552).
-    const canvas = { w: info.canvasWidth, h: Math.ceil(info.canvasWidth / info.aspectRatio) };
-    await page.setViewportSize({ width: canvas.w, height: canvas.h });
+    const { canvas, list } = await openDeck(page, baseUrl, timeout, slidevVersion);
     const slides = [];
-    for (const s of info.slides) {
+    for (const s of list) {
       try {
         slides.push(await captureSlide(page, baseUrl, s, canvas, screenshots, timeout));
       } catch (err) {
@@ -47,6 +29,31 @@ export async function captureDeck({ baseUrl, browser: given = null, chromium, ti
     if (given) await page?.close();
     else await browser.close();
   }
+}
+
+// Opens the deck and reads what it is made of. Also what gets a fresh dev server past the reload it can
+// do while Vite prepares its dependencies. `page` ends up sized to the slide.
+export async function openDeck(page, baseUrl, timeout, slidevVersion) {
+  await open(page, `${baseUrl}/1?print`);
+  try {
+    await page.waitForFunction(() => window.__slidev__?.nav?.total > 0 && !!document.querySelector(".slidev-page"));
+  } catch {
+    throw new Error(await whyNoDeck(page, timeout, slidevVersion));
+  }
+  const info = await page.evaluate(() => {
+    const s = window.__slidev__;
+    return {
+      canvasWidth: s.configs.canvasWidth || 980,
+      aspectRatio: s.configs.aspectRatio || 16 / 9,
+      // sourceIndex counts within the slide's own markdown file (filepath; an imported `src:` file
+      // has its own). A transition belongs to the slide being arrived at.
+      slides: s.nav.slides.map((r) => ({ no: r.no, sourceIndex: r.meta?.slide?.sourceIndex ?? null, filepath: r.meta?.slide?.filepath || null, notes: r.meta?.slide?.note || null, transition: r.meta?.transition ?? s.configs.transition ?? null })),
+    };
+  });
+  // Slidev's own slide height: Math.ceil(canvasWidth / aspectRatio) (980 x 16/9 -> 552).
+  const canvas = { w: info.canvasWidth, h: Math.ceil(info.canvasWidth / info.aspectRatio) };
+  await page.setViewportSize({ width: canvas.w, height: canvas.h });
+  return { canvas, list: info.slides };
 }
 
 // The first page never showed Slidev's slide data and slides. A page that drew nothing is a deck
@@ -66,8 +73,10 @@ async function whyNoDeck(page, timeout, slidevVersion) {
   return `unsupported Slidev version ${slidevVersion}: the page has no slide navigation data (window.__slidev__) or .slidev-page elements`;
 }
 
-async function captureSlide(page, baseUrl, s, canvas, screenshots, timeout) {
-  await open(page, `${baseUrl}/${s.no}?print`);
+// One slide's Scene. `url` opens another state of it than the final one; `jpeg` makes pictures that cover
+// at least half the slide JPEGs, for an animated export, where they appear faster after a slide change.
+export async function captureSlide(page, baseUrl, s, canvas, screenshots, timeout, { url, jpeg = false } = {}) {
+  await open(page, url ?? `${baseUrl}/${s.no}?print`);
   const sel = `.slidev-page-${s.no}`;
   await page.waitForFunction((pageSel) => {
     const p = document.querySelector(pageSel);
@@ -83,7 +92,7 @@ async function captureSlide(page, baseUrl, s, canvas, screenshots, timeout) {
   await videosLoaded(page, sel);
   await page.addScriptTag({ content: EXTRACT });
   const scene = await page.evaluate(({ pageSel, size }) => window.__pptxExtract(document.querySelector(pageSel), size), { pageSel: sel, size: canvas });
-  const slide = { sel, canvas };
+  const slide = { sel, canvas, jpeg };
   // A picture shows what is behind its element, never what is drawn above it: the slide's
   // pictures are taken without the global top layer over them, the global bottom layer's without
   // the slide either. Those are exported on their own, above the picture.
@@ -297,7 +306,7 @@ async function loadVideo(page, node, slide) {
         // the element's own frame below
       }
     }
-    if (!node.posterImage) node.posterImage = { data: await elementShot(page, node, slide), ext: "png" };
+    if (!node.posterImage) node.posterImage = { data: await elementShot(page, node, { ...slide, jpeg: false }), ext: "png" };
   } catch (err) {
     delete node.data;
     Object.assign(node, { kind: "raster", reason: `video not embedded: ${String(err.message || err).split("\n")[0]}`, png: await elementShot(page, node, slide) });
@@ -407,10 +416,14 @@ export function partOnSlide(rect, canvas) {
 // An element running past the slide (Leaflet's overlay is larger than its map) is shot only as far as
 // it is on the slide, the rest being invisible anyway: Chromium's capture of an element that doesn't
 // fit the viewport draws the page at the wrong scale. The node then covers just that part.
-async function elementShot(page, node, { sel, canvas }) {
+async function elementShot(page, node, { sel, canvas, jpeg = false }) {
   try {
     const part = partOnSlide(node.rect, canvas);
-    if (!part) return await page.locator(`[data-pptx-node="${node.id}"]`).screenshot({ animations: "disabled" });
+    const shown = part ?? node.rect;
+    const asJpeg = jpeg && shown.w * shown.h >= (canvas.w * canvas.h) / 2;
+    const format = asJpeg ? { type: "jpeg", quality: 85 } : {};
+    if (asJpeg) node.pictureExt = "jpg";
+    if (!part) return await page.locator(`[data-pptx-node="${node.id}"]`).screenshot({ animations: "disabled", ...format });
     const origin = await page.locator(sel).evaluate((el) => {
       el.scrollIntoView({ block: "start", inline: "start" });
       const r = el.getBoundingClientRect();
@@ -418,7 +431,7 @@ async function elementShot(page, node, { sel, canvas }) {
     });
     const scale = origin.width / canvas.w || 1;
     const clip = { x: origin.x + part.x * scale, y: origin.y + part.y * scale, width: part.w * scale, height: part.h * scale };
-    const png = await page.screenshot({ clip, animations: "disabled" });
+    const png = await page.screenshot({ clip, animations: "disabled", ...format });
     node.rect = part;
     return png;
   } catch {

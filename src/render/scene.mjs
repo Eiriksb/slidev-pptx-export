@@ -387,7 +387,7 @@ export function shapesOf(node, u, style) {
     case "image":
       return node.data ? [imageShape(node, u, style)] : [];
     case "raster":
-      return node.png ? [{ kind: "image", ...u.box(node.rect), data: node.png, ext: "png", alt: node.alt || "" }] : [];
+      return node.png ? [{ kind: "image", ...u.box(node.rect), data: node.png, ext: node.pictureExt || "png", alt: node.alt || "" }] : [];
     case "video":
       return node.data ? [videoShape(node, u)] : [];
     case "missing":
@@ -445,7 +445,9 @@ export function sceneToSpec(scene, style) {
       if (spec.shapes.length > 0) spec.placeholders.titleZ = spec.shapes.length;
       continue;
     }
-    spec.shapes.push(...shapesOf(node, u, style));
+    const shapes = shapesOf(node, u, style);
+    if (node.effects?.length) for (const shape of shapes) shape.effects = node.effects;
+    spec.shapes.push(...shapes);
   }
   if (title) {
     // The placeholder would inherit its layout's alignment (Title Slide centres) and the master's

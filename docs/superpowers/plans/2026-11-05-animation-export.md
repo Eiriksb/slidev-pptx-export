@@ -394,8 +394,8 @@ const box = (id, x = 0) => ({ kind: "box", id, rect: { x, y: 0, w: 10, h: 10 }, 
 const raster = (hash, w = 1000) => ({ kind: "raster", rect: { x: 0, y: 0, w, h: 500 }, png: Buffer.from(hash) });
 
 test("a signature covers every kind, ignores ids and paths, and hashes bytes", () => {
-  const table = { kind: "table", id: 1, rect: { x: 0, y: 0, w: 1, h: 1 }, rows: [["a"]], elPath: "x" };
-  assert.equal(stateSignature(table), stateSignature({ ...table, id: 2, elPath: "y" }));
+  const table = { kind: "table", id: 1, rect: { x: 0, y: 0, w: 1, h: 1 }, rows: [["a"]], label: "x" };
+  assert.equal(stateSignature(table), stateSignature({ ...table, id: 2, label: "y" }));
   assert.notEqual(stateSignature(table), stateSignature({ ...table, rows: [["b"]] }));
   assert.equal(stateSignature(raster("a")), stateSignature(raster("a")));
   assert.notEqual(stateSignature(raster("a")), stateSignature(raster("b")));

@@ -37,7 +37,7 @@ export async function captureDeck({ baseUrl, browser: given = null, chromium, ti
     const slides = [];
     for (const s of info.slides) {
       try {
-        slides.push(await captureSlide(page, baseUrl, s, canvas, screenshots));
+        slides.push(await captureSlide(page, baseUrl, s, canvas, screenshots, timeout));
       } catch (err) {
         slides.push({ index: s.no, sourceIndex: s.sourceIndex, filepath: s.filepath, error: String(err.message || err).split("\n")[0] });
       }
@@ -66,7 +66,7 @@ async function whyNoDeck(page, timeout, slidevVersion) {
   return `unsupported Slidev version ${slidevVersion}: the page has no slide navigation data (window.__slidev__) or .slidev-page elements`;
 }
 
-async function captureSlide(page, baseUrl, s, canvas, screenshots) {
+async function captureSlide(page, baseUrl, s, canvas, screenshots, timeout) {
   await open(page, `${baseUrl}/${s.no}?print`);
   const sel = `.slidev-page-${s.no}`;
   await page.waitForFunction((pageSel) => {
@@ -75,6 +75,7 @@ async function captureSlide(page, baseUrl, s, canvas, screenshots) {
   }, sel);
   await page.evaluate(() => document.fonts.ready.then(() => true));
   await assertSlideLoaded(page, sel);
+  const settled = await waitForQuietSlide(page, sel, timeout);
   await waitForStableCanvases(page);
   // Again, in case Vite reloaded the page while it settled.
   await hideViteOverlay(page);
@@ -82,6 +83,7 @@ async function captureSlide(page, baseUrl, s, canvas, screenshots) {
   await videosLoaded(page, sel);
   await page.addScriptTag({ content: EXTRACT });
   const scene = await page.evaluate(({ pageSel, size }) => window.__pptxExtract(document.querySelector(pageSel), size), { pageSel: sel, size: canvas });
+  const slide = { sel, canvas };
   // A picture shows what is behind its element, never what is drawn above it: the slide's
   // pictures are taken without the global top layer over them, the global bottom layer's without
   // the slide either. Those are exported on their own, above the picture.
@@ -91,16 +93,25 @@ async function captureSlide(page, baseUrl, s, canvas, screenshots) {
     const shown = await hide(page, above);
     try {
       for (const node of own) {
-        if (node.kind === "image") await loadImage(page, node);
-        else if (node.kind === "video") await loadVideo(page, node);
-        else node.png = await pictureOf(page, node);
+        if (node.kind === "image") await loadImage(page, node, slide);
+        else {
+          // ... nor what the slide draws over it: that is exported on its own, above the picture.
+          const uncovered = await hide(page, node.above || []);
+          try {
+            if (node.kind === "video") await loadVideo(page, node, slide);
+            else node.png = await pictureOf(page, node, slide);
+          } finally {
+            await uncovered();
+          }
+        }
       }
     } finally {
       await shown();
     }
   }
   if (scene.background.raster) scene.background.png = await backgroundShot(page, sel);
-  return { ...scene, index: s.no, sourceIndex: s.sourceIndex, notes: s.notes, screenshot };
+  scene.nodes = withoutCoveredPictures(scene.nodes);
+  return { ...scene, index: s.no, sourceIndex: s.sourceIndex, notes: s.notes, screenshot, ...(settled ? {} : { unsettled: true }) };
 }
 
 // /<n>?print has every slide's resources in the DOM, so one image that never answers would keep
@@ -125,6 +136,45 @@ async function hideViteOverlay(page) {
 async function assertSlideLoaded(page, sel) {
   const failed = await page.evaluate((pageSel) => /An error occurred on this slide|Failed to fetch this slide/.test(document.querySelector(pageSel).textContent), sel);
   if (failed) throw new Error("Slidev could not load this slide (see its terminal output)");
+}
+
+// How long a slide's DOM must stay unchanged to count as finished drawing, and how long after that
+// it may wait for images still loading (one that never answers mustn't hold up the export).
+const QUIET_MS = 500;
+const IMAGE_GRACE_MS = 3000;
+
+// A slide's own scripts may still be drawing when it has loaded: a map flying to its place and
+// loading tiles, an animation run by requestAnimationFrame. Waits until the slide's DOM stops
+// changing and its images have loaded. False when it was still changing after `limit` ms.
+function waitForQuietSlide(page, sel, limit) {
+  return page.evaluate(({ pageSel, quiet, grace, limit: cap }) => new Promise((done) => {
+    const root = document.querySelector(pageSel);
+    const pending = () => [...root.querySelectorAll("img")].filter((img) => !img.complete);
+    // An image still loading on a page open this long has had open()'s wait already: it may never answer.
+    const waitedFor = new Set(performance.now() > grace ? pending() : []);
+    const loading = () => pending().some((img) => !waitedFor.has(img));
+    let timer;
+    let quietSince = null;
+    const finish = (settled) => {
+      observer.disconnect();
+      clearTimeout(timer);
+      clearTimeout(end);
+      done(settled);
+    };
+    const check = () => {
+      quietSince ??= performance.now();
+      if (loading() && performance.now() - quietSince < grace) timer = setTimeout(check, 100);
+      else finish(true);
+    };
+    const observer = new MutationObserver(() => {
+      quietSince = null;
+      clearTimeout(timer);
+      timer = setTimeout(check, quiet);
+    });
+    observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+    timer = setTimeout(check, quiet);
+    const end = setTimeout(() => finish(false), cap);
+  }), { pageSel: sel, quiet: QUIET_MS, grace: IMAGE_GRACE_MS, limit });
 }
 
 // Charts animate in; wait until every canvas stops changing (up to ~5 s).
@@ -183,7 +233,7 @@ async function svgPng(page, svg, rect) {
 // Image bytes for the writer. An <img> that can't be fetched is drawn as a picture; a CSS background
 // (the extractor gives those no natural size) is dropped, since a picture of its container would
 // bake the container's text in.
-async function loadImage(page, node) {
+async function loadImage(page, node, slide) {
   const isBackground = !node.natural;
   try {
     node.data = await fetchBytes(page, node.src);
@@ -207,7 +257,7 @@ async function loadImage(page, node) {
       Object.assign(node, { kind: "missing", label: node.alt || node.src });
       return;
     }
-    Object.assign(node, { kind: "raster", reason: `image not fetched: ${String(err.message || err).split("\n")[0]}`, label: node.alt || node.src, png: await elementShot(page, node.id) });
+    Object.assign(node, { kind: "raster", reason: `image not fetched: ${String(err.message || err).split("\n")[0]}`, label: node.alt || node.src, png: await elementShot(page, node, slide) });
   }
 }
 
@@ -231,7 +281,7 @@ async function videosLoaded(page, sel) {
 // shows something; otherwise (or when there is none) the poster attribute's picture, else the frame the
 // element shows. A video that can't be
 // fetched, or that PowerPoint can't play, is a picture of its frame.
-async function loadVideo(page, node) {
+async function loadVideo(page, node, slide) {
   const ext = VIDEO_FORMATS[(node.src.split(/[?#]/)[0].split(".").pop() || "").toLowerCase()];
   try {
     if (!ext) throw new Error("not a format PowerPoint plays embedded");
@@ -247,10 +297,10 @@ async function loadVideo(page, node) {
         // the element's own frame below
       }
     }
-    if (!node.posterImage) node.posterImage = { data: await elementShot(page, node.id), ext: "png" };
+    if (!node.posterImage) node.posterImage = { data: await elementShot(page, node, slide), ext: "png" };
   } catch (err) {
     delete node.data;
-    Object.assign(node, { kind: "raster", reason: `video not embedded: ${String(err.message || err).split("\n")[0]}`, png: await elementShot(page, node.id) });
+    Object.assign(node, { kind: "raster", reason: `video not embedded: ${String(err.message || err).split("\n")[0]}`, png: await elementShot(page, node, slide) });
   }
 }
 
@@ -332,14 +382,45 @@ async function hide(page, selectors) {
 }
 
 // A raster node's picture: its element as drawn - or, for a background picture, without its contents.
-function pictureOf(page, node) {
-  if (!node.contentsHidden) return elementShot(page, node.id);
-  return withoutContents(page, `[data-pptx-node="${node.id}"]`, () => elementShot(page, node.id));
+function pictureOf(page, node, slide) {
+  if (!node.contentsHidden) return elementShot(page, node, slide);
+  return withoutContents(page, `[data-pptx-node="${node.id}"]`, () => elementShot(page, node, slide));
 }
 
-async function elementShot(page, id) {
+// A picture is an opaque screenshot of everything beneath it, so a picture wholly under a later one
+// never shows and is already part of that one.
+function withoutCoveredPictures(nodes) {
+  const covers = (a, b) => a.x <= b.x && a.y <= b.y && a.x + a.w >= b.x + b.w && a.y + a.h >= b.y + b.h;
+  return nodes.filter((n, i) => n.kind !== "raster" || !nodes.slice(i + 1).some((m) => m.kind === "raster" && m.png && m.layer === n.layer && covers(m.rect, n.rect)));
+}
+
+// The part of `rect` on the slide, when some of it runs past the slide's edges; else null.
+export function partOnSlide(rect, canvas) {
+  const x = Math.max(0, rect.x);
+  const y = Math.max(0, rect.y);
+  const right = Math.min(canvas.w, rect.x + rect.w);
+  const bottom = Math.min(canvas.h, rect.y + rect.h);
+  if (x === rect.x && y === rect.y && right === rect.x + rect.w && bottom === rect.y + rect.h) return null;
+  return { x, y, w: right - x, h: bottom - y };
+}
+
+// An element running past the slide (Leaflet's overlay is larger than its map) is shot only as far as
+// it is on the slide, the rest being invisible anyway: Chromium's capture of an element that doesn't
+// fit the viewport draws the page at the wrong scale. The node then covers just that part.
+async function elementShot(page, node, { sel, canvas }) {
   try {
-    return await page.locator(`[data-pptx-node="${id}"]`).screenshot({ animations: "disabled" });
+    const part = partOnSlide(node.rect, canvas);
+    if (!part) return await page.locator(`[data-pptx-node="${node.id}"]`).screenshot({ animations: "disabled" });
+    const origin = await page.locator(sel).evaluate((el) => {
+      el.scrollIntoView({ block: "start", inline: "start" });
+      const r = el.getBoundingClientRect();
+      return { x: r.left, y: r.top, width: r.width };
+    });
+    const scale = origin.width / canvas.w || 1;
+    const clip = { x: origin.x + part.x * scale, y: origin.y + part.y * scale, width: part.w * scale, height: part.h * scale };
+    const png = await page.screenshot({ clip, animations: "disabled" });
+    node.rect = part;
+    return png;
   } catch {
     return null;
   }

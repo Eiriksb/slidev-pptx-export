@@ -72,7 +72,7 @@ async function main() {
   console.log(`Wrote ${result.slideCount} slides to ${result.outputPath}`);
   if (result.translatedCharts) console.log(`Translated ${result.translatedCharts} chart(s) into native editable PowerPoint content.`);
   if (result.unresolvedCharts.length) {
-    console.log(`No resolver for: ${result.unresolvedCharts.join(", ")} - exported as placeholder box(es). Add a resolver to chartResolvers in your pptx.config.mjs to translate them too.`);
+    console.log(`No resolver for: ${result.unresolvedCharts.join(", ")} - exported as placeholder box(es). Export with --render to convert what these components draw, or add a resolver to chartResolvers in your pptx.config.mjs.`);
   }
 }
 

@@ -348,3 +348,9 @@ test("the same element at another opacity, rotation, fit or alignment is not the
   const { args } = setup("# A\n\n---\n\n# B\n", { slides: [scene(1, 0, "A", [footerLogo()]), scene(2, 1, "B", [footerLogo({ opacity: 0.5 })])] });
   assert.deepEqual((await withWarnings(() => renderSpecs(args))).result.masterShapes, []);
 });
+
+test("a slide that kept changing until the timeout is reported", async () => {
+  const { args } = setup("# One\n", { slides: [{ ...scene(1, 0, "One"), unsettled: true }] });
+  const { warnings } = await withWarnings(() => renderSpecs(args));
+  assert.ok(warnings.some((w) => /slide 1 .*still changing/.test(w)), warnings.join("\n"));
+});

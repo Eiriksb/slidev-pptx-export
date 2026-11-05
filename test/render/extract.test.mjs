@@ -763,3 +763,120 @@ test("dashed and dotted borders keep their pattern: a box's outline, a single si
   assert.equal(boxes[0].border.dash, "dashed");
   assert.equal(boxes[1].sides[0].dash, "dotted");
 });
+
+const order = (s) => s.nodes.filter((n) => n.kind === "text" || (n.kind === "box" && n.fill)).map((n) => (n.kind === "text" ? textOf(n) : n.fill.hex));
+const ABS = "position:absolute;left:0;top:0;width:200px;height:100px";
+
+test("nodes come in the page's paint order: a higher z-index is drawn later, whatever the DOM order", opts, async () => {
+  const s = await extractHtml(browser, `<div style="${ABS};z-index:5">Above</div><div style="${ABS};background:#112233"></div>`);
+  assert.deepEqual(order(s), ["112233", "Above"]);
+});
+
+test("paint order: in-flow content lies beneath positioned boxes, a negative z-index beneath the flow", opts, async () => {
+  const s = await extractHtml(browser, `<div style="${ABS};background:#112233"></div><p style="margin:0">Flow</p><div style="${ABS};z-index:-1;background:#445566"></div>`);
+  assert.deepEqual(order(s), ["445566", "Flow", "112233"]);
+});
+
+test("paint order: a z-index counts only within its stacking context", opts, async () => {
+  const s = await extractHtml(browser,
+    `<div style="${ABS};z-index:1;background:#112233"><div style="${ABS};z-index:100;background:#445566"></div></div><div style="${ABS};z-index:2;background:#778899"></div>`);
+  assert.deepEqual(order(s), ["112233", "445566", "778899"]);
+});
+
+test("paint order: a positioned box without z-index covers its earlier positioned sibling's contents", opts, async () => {
+  const s = await extractHtml(browser, `<div style="${ABS}"><p style="margin:0">Under</p></div><div style="${ABS};background:#112233"></div>`);
+  assert.deepEqual(order(s), ["Under", "112233"]);
+});
+
+test("paint order: an ::after with a z-index lies over its element's lower children and under its higher ones", opts, async () => {
+  const s = await extractHtml(browser,
+    `<div id="host" style="position:relative;width:300px;height:200px"><div style="${ABS};z-index:0;background:#112233"></div><div style="${ABS};z-index:2;background:#445566"></div></div>`,
+    { css: `#host::after{content:"";position:absolute;left:0;top:0;width:300px;height:200px;z-index:1;background:#778899}` });
+  assert.deepEqual(order(s), ["112233", "778899", "445566"]);
+});
+
+test("a picture names what is drawn above it, and only what overlaps it", opts, async () => {
+  const s = await extractHtml(browser,
+    `<div id="host" style="position:relative;width:600px;height:300px">` +
+      `<div id="pic" style="${ABS};filter:blur(1px);background:#112233"></div>` +
+      `<p id="over" style="position:absolute;left:10px;top:10px;margin:0;z-index:1">Over</p>` +
+      `<p id="apart" style="position:absolute;left:400px;top:200px;margin:0;z-index:1">Apart</p></div>`,
+    { css: `#host::after{content:"";position:absolute;left:0;top:0;width:50px;height:50px;z-index:1;background:#778899}` });
+  const pic = s.nodes.find((n) => n.kind === "raster");
+  assert.equal(pic.above.length, 2, "the text over it and its parent's ::after, not the text beside it");
+  assert.ok(pic.above.some((sel) => sel.endsWith("::after")), "a pseudo-element of an element holding the picture is hidden by itself");
+  assert.ok(pic.above.every((sel) => /^\[data-pptx-el="\d+"\](::after)?$/.test(sel)), pic.above.join(" "));
+});
+
+const CARD = "width:300px;padding:10px;border-radius:12px;backdrop-filter:blur(10px)";
+
+test("a nearly opaque card with a backdrop-filter is a solid native box: nothing sharp shows through where the page blurs it; its contents stay native", opts, async () => {
+  const s = await extractHtml(browser, `<div style="${CARD};background:#f8fbf5f2"><p style="margin:0">Inside</p></div>`);
+  assert.equal(s.nodes.filter((n) => n.kind === "raster").length, 0);
+  const box = s.nodes.find((n) => n.kind === "box");
+  assert.deepEqual(box.fill, { hex: "F8FBF5", alpha: 1 });
+  assert.deepEqual(s.nodes.filter((n) => n.kind === "text").map(textOf), ["Inside"]);
+});
+
+test("a glass card shows its blur: a picture behind its contents, which stay native", opts, async () => {
+  const s = await extractHtml(browser,
+    `<div style="${CARD};background:rgba(255,255,255,.3)"><p style="margin:0">Inside</p><table><tr><td>Cell</td></tr></table></div>`);
+  const pic = s.nodes.find((n) => n.kind === "raster");
+  assert.equal(pic.reason, "backdrop-filter");
+  assert.equal(pic.contentsHidden, true);
+  const text = s.nodes.find((n) => n.kind === "text");
+  const table = s.nodes.find((n) => n.kind === "table");
+  assert.equal(textOf(text), "Inside");
+  assert.ok(s.nodes.indexOf(pic) < s.nodes.indexOf(text) && s.nodes.indexOf(pic) < s.nodes.indexOf(table), "the contents lie over the picture");
+});
+
+test("a backdrop-filter without a fill to hide it is pictured, and an image with one stays a picture of itself", opts, async () => {
+  const s = await extractHtml(browser,
+    `<div style="${CARD}"><p style="margin:0">Inside</p></div><img src="${PNG}" style="width:40px;height:40px;backdrop-filter:blur(2px)">`);
+  const [card, img] = s.nodes.filter((n) => n.kind === "raster");
+  assert.equal(card.contentsHidden, true);
+  assert.equal(img.contentsHidden, undefined);
+  assert.equal(img.reason, "backdrop-filter");
+});
+
+// A table of `n` rows, each `rowH` px tall; the header row is `headH` px tall.
+const tallTable = (n, rowH = 20, headH = 30) =>
+  `<table style="border-collapse:collapse;width:200px;font:12px Arial"><thead><tr><th style="height:${headH}px;padding:0">Head</th></tr></thead><tbody>` +
+  Array.from({ length: n }, (_, i) => `<tr><td style="height:${rowH}px;padding:0">R${i}</td></tr>`).join("") +
+  "</tbody></table>";
+const cellsOf = (table) => table.rows.map((row) => row[0].runs.map((r) => r.text).join(""));
+
+test("a table scrolling in its container has the rows it shows: a row cut off at the edge is left out", opts, async () => {
+  // room for the header (30) and 4 rows (80), with the 5th cut in half
+  const s = await extractHtml(browser, `<div style="max-height:120px;overflow-y:auto;scrollbar-width:none">${tallTable(300)}</div>`);
+  const table = s.nodes.find((n) => n.kind === "table");
+  assert.deepEqual(cellsOf(table), ["Head", "R0", "R1", "R2", "R3"]);
+  assert.deepEqual(table.rowH, [30, 20, 20, 20, 20]);
+  assert.equal(table.rect.h, 110, "the table is as tall as the rows it keeps");
+});
+
+test("a table clipped by a wrapper further out, or scrolled down, has the rows the page shows", opts, async () => {
+  const clipped = await extractHtml(browser, `<div style="height:90px;overflow:hidden"><div>${tallTable(10)}</div></div>`);
+  assert.deepEqual(cellsOf(clipped.nodes.find((n) => n.kind === "table")), ["Head", "R0", "R1", "R2"]);
+  const scrolled = await extractHtml(browser, `<div id="box" style="height:90px;overflow-y:auto;scrollbar-width:none">${tallTable(20)}</div>`, {
+    setup: () => { document.getElementById("box").scrollTop = 75; },
+  });
+  // 75 px down: the header and the first 2 rows have passed, R2 is cut at the top and R6 at the bottom
+  assert.deepEqual(cellsOf(scrolled.nodes.find((n) => n.kind === "table")), ["R3", "R4", "R5"]);
+});
+
+test("a table that fits its container, or runs off the slide with no container, keeps every row", opts, async () => {
+  const fits = await extractHtml(browser, `<div style="max-height:400px;overflow-y:auto">${tallTable(5)}</div>`);
+  assert.equal(fits.nodes.find((n) => n.kind === "table").rows.length, 6);
+  const long = await extractHtml(browser, tallTable(40));
+  assert.equal(long.nodes.find((n) => n.kind === "table").rows.length, 41);
+});
+
+test("a card holding a form control stays one picture: the browser's own drawing of a control has no native form", opts, async () => {
+  const s = await extractHtml(browser, `<div style="${CARD};background:#f8fbf5f2"><p style="margin:0">Weight</p><input type="range" style="width:100%"></div>`);
+  const pics = s.nodes.filter((n) => n.kind === "raster");
+  assert.equal(pics.length, 1);
+  assert.equal(pics[0].reason, "backdrop-filter");
+  assert.equal(pics[0].contentsHidden, undefined);
+  assert.equal(s.nodes.filter((n) => n.kind === "text").length, 0, "its text is in the picture");
+});

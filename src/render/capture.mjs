@@ -117,7 +117,7 @@ async function captureSlide(page, baseUrl, s, canvas, screenshots, timeout) {
 // /<n>?print has every slide's resources in the DOM, so one image that never answers would keep
 // "networkidle" from ever settling. Wait for the DOM, then give the network a few seconds to quiet
 // down; the callers' own readiness checks decide whether the page is usable.
-async function open(page, url) {
+export async function open(page, url) {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {});
   await hideViteOverlay(page);
@@ -146,7 +146,7 @@ const IMAGE_GRACE_MS = 3000;
 // A slide's own scripts may still be drawing when it has loaded: a map flying to its place and
 // loading tiles, an animation run by requestAnimationFrame. Waits until the slide's DOM stops
 // changing and its images have loaded. False when it was still changing after `limit` ms.
-function waitForQuietSlide(page, sel, limit) {
+export function waitForQuietSlide(page, sel, limit) {
   return page.evaluate(({ pageSel, quiet, grace, limit: cap }) => new Promise((done) => {
     const root = document.querySelector(pageSel);
     const pending = () => [...root.querySelectorAll("img")].filter((img) => !img.complete);

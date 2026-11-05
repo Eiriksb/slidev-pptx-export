@@ -10,6 +10,7 @@ import { esc } from "./xml.mjs";
 import { themeXml } from "./theme.mjs";
 import { layoutDefs, layoutXml, masterXml } from "./master.mjs";
 import { placeholderXml, shapeXml, pictureXml, slideXml, graphicFrameXml, backgroundXml, timingXml } from "./shapes.mjs";
+import { animationTimingXml, transitionXml } from "./timing.mjs";
 import { presentationXml, presPropsXml, viewPropsXml, appXml, coreXml } from "./presentation.mjs";
 import { TABLE_URI, tableXml, tableStylesXml } from "./table.mjs";
 import { CHART_URI, chartXml, chartRefXml } from "./chart.mjs";
@@ -47,6 +48,7 @@ class MediaStore {
 
 async function shapeToXml(shape, id, env) {
   const { pkg, part, media, ctx } = env;
+  for (const e of shape.effects || []) env.effects.push({ spid: id, kind: shape.kind, fill: !!shape.fill, ...e });
   switch (shape.kind) {
     case "text":
       return shapeXml(shape, id, ctx);
@@ -154,7 +156,7 @@ export async function writePptx(slides, deck) {
   const logo = deck.logo ? { rId: pkg.rel(MASTER, media.add(deck.logo.path), REL.image), box: deck.logo.box } : null;
   // Render mode can put elements every slide shares (a footer logo) on the master. Their ids
   // follow the master's own title (2), body (3) and logo (4).
-  const masterEnv = { pkg, part: MASTER, media, ctx, counters, videos: [] };
+  const masterEnv = { pkg, part: MASTER, media, ctx, counters, videos: [], effects: [] };
   let extra = "";
   let masterShapeId = 5;
   for (const shape of deck.masterShapes || []) extra += await shapeToXml(shape, masterShapeId++, masterEnv);
@@ -180,7 +182,7 @@ export async function writePptx(slides, deck) {
     if (!layout) throw new Error(`Slide ${i + 1}: unknown layout ${JSON.stringify(spec.layout)}`);
     pkg.rel(part, layout.part, REL.slideLayout);
     const sctx = { ...ctx, link: (url) => pkg.rel(part, url, REL.hyperlink, { external: true }) };
-    const env = { pkg, part, media, ctx: sctx, counters, videos: [] };
+    const env = { pkg, part, media, ctx: sctx, counters, videos: [], effects: [] };
 
     let nextId = 2;
     let xml = "";
@@ -212,7 +214,8 @@ export async function writePptx(slides, deck) {
     let bg = "";
     if (spec.background?.image) bg = backgroundXml(spec.background, pkg.rel(part, media.add(spec.background.image), REL.image));
     else if (spec.background?.color || spec.background?.gradient) bg = backgroundXml(spec.background);
-    pkg.addXml(part, CT.slide, slideXml(xml, bg, timingXml(env.videos)));
+    const timing = spec.animated ? animationTimingXml({ videos: env.videos, effects: env.effects }) : timingXml(env.videos);
+    pkg.addXml(part, CT.slide, slideXml(xml, bg, timing, transitionXml(spec.transition)));
     if (spec.notes) {
       const notesPart = `/ppt/notesSlides/notesSlide${i + 1}.xml`;
       pkg.addXml(notesPart, CT.notesSlide, notesSlideXml(spec.notes, ctx));

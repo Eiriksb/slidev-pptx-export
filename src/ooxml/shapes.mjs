@@ -124,10 +124,10 @@ export function graphicFrameXml({ id, name, box, uri, inner }) {
   );
 }
 
-export function slideXml(shapesXml, bgXml = "", timingXml = "") {
+export function slideXml(shapesXml, bgXml = "", timingXml = "", transitionXml = "") {
   return (
     `${XML_DECL}<p:sld ${NS_PML}><p:cSld>${bgXml}<p:spTree>${SP_TREE_HEADER}${shapesXml}</p:spTree></p:cSld>` +
-    `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${timingXml}</p:sld>`
+    `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml}${timingXml}</p:sld>`
   );
 }
 

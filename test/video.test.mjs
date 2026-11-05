@@ -37,6 +37,11 @@ test("a video is a picture with the file linked and embedded, the poster as its 
   assert.deepEqual(z.buffer(`ppt/media/${vFile.split("/").pop()}`), MP4);
 });
 
+test("a video's embedded copy uses the extension id PowerPoint writes", async () => {
+  const { z } = await build([video()]);
+  assert.match(z.text("ppt/slides/slide1.xml"), /<p:ext uri="\{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230\}"><p14:media /);
+});
+
 test("an autoplaying, looping, muted video starts with the slide and repeats", async () => {
   const { z } = await build([video()]);
   const slide = z.text("ppt/slides/slide1.xml");

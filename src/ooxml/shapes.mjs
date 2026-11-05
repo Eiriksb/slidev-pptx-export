@@ -92,7 +92,7 @@ const ASVG = "http://schemas.microsoft.com/office/drawing/2016/SVG/main";
 
 // p14:media in a picture's nvPr: the embedded copy PowerPoint 2010+ plays (a:videoFile links the same file
 // for older readers).
-const MEDIA_EXT = "{DAA4B4D4-6D71-4841-9C94-3DA1BC7CA4C3}";
+const MEDIA_EXT = "{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}";
 const P14 = "http://schemas.microsoft.com/office/powerpoint/2010/main";
 
 export function pictureXml({ id, name, descr, rId, svgRId, box, crop, line, shadow, video, radius }) {

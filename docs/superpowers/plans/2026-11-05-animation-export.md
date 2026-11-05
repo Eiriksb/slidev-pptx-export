@@ -4,7 +4,7 @@
 
 **Goal:** An opt-in render-mode export whose slide transitions, click reveals and script-driven motion play in a PowerPoint for the web slide show, driven by keyboard or clicker, in Slidev's click order.
 
-**Architecture:** Each click state of a slide is captured and diffed. A click with no script motion becomes native Fade effects on the current PowerPoint slide; a click with script motion starts a new PowerPoint slide whose MP4 clip starts by itself. The writer gains a timing module and otherwise knows nothing about Slidev; everything else is new modules beside the existing render pipeline, used only when the flag is on.
+**Architecture:** Each click state of a slide is captured and diffed. A click with no script motion becomes native Fade effects on the current still PowerPoint slide. A click with script motion becomes a PowerPoint slide holding only an MP4 clip of the whole slide, which starts by itself; the next reveal opens a new still slide in its own state. The writer gains a timing module and otherwise knows nothing about Slidev; everything else is new modules beside the existing render pipeline, used only when the flag is on.
 
 **Tech Stack:** Node ES modules, `node:test`, Playwright Chromium, hand-written OOXML, `ffmpeg` or GStreamer found at run time.
 
@@ -198,7 +198,7 @@ Message: `Writer: click effects, a clip that starts by itself and slide transiti
 
 **Interfaces:**
 - Consumes: Task 2's `writePptx` fields.
-- Produces: a recorded answer on whether a full-slide picture may enter above a held clip, used in Task 6 Step 5.
+- Produces: the answer on native shapes above clips, which reshaped Tasks 5 to 9.
 
 This must be run from the session that holds the conversation, because it needs the user and the browser pane.
 
@@ -217,6 +217,8 @@ Record: how long the blank lasts before the poster, on first visit and again aft
 - [ ] **Step 4: Update the spec's table and "Planning a slide" with the results, and commit**
 
 Message: `Design: results of the early web checkpoint`. If a clip with later reveals misbehaves, stop and tell the user before Task 4: the design's core has changed.
+
+**Result:** native shapes above clips did not survive a full run, even with a 1 s start delay. By the agreement recorded in the spec, a clip slide now holds only the clip, and Tasks 5 to 9 below reflect that. Nothing in the writer changes for it: `animationTimingXml` already handles a slide with only a clip.
 
 ### Task 4: Clip encoder
 
@@ -253,7 +255,14 @@ test("GStreamer arguments ask x264enc for avc, so h264parse is not needed", () =
   assert.ok(args.includes("video/x-h264,profile=high,stream-format=avc,alignment=au"));
   assert.ok(args.includes("quantizer=23") && args.includes("pass=qual"));
   assert.ok(!args.includes("h264parse"));
+  assert.ok(!args.includes("h264parse"));
+  assert.ok(args.includes("video/x-raw,format=I420,colorimetry=bt709"));
 });
+
+test("a clip plays in the colours of its frames, in real Chrome", { skip: chromeAndEncoder() ? false : "needs Google Chrome and an encoder: Playwright's Chromium can't decode H.264" }, async () => {
+  // Frames from a fixture picture, encoded, drawn to a canvas in a page opened with `channel: "chrome"`: the
+  // whole-frame mean of each channel stays within 3 levels out of 255 of the picture's.
+  assert.ok(await colourDrift() <= 3);
 
 test("a real encode gives an MP4, when an encoder is installed", { skip: findEncoder() ? false : "no encoder installed" }, () => {
   // Writes 10 copies of a small JPEG from the fixtures to a temporary folder.
@@ -269,7 +278,7 @@ Expected: FAIL, module not found.
 
 - [ ] **Step 3: Implement `src/render/encode.mjs`**
 
-ffmpeg detection reads `ffmpeg -hide_banner -encoders` for `libx264`. GStreamer detection runs `gst-inspect-1.0 x264enc` and `gst-inspect-1.0 mp4mux`. GStreamer pipeline: `multifilesrc location=<dir>/f%05d.jpg index=0 stop-index=<count-1> caps=image/jpeg,framerate=<fps>/1 ! jpegdec ! videoconvert ! video/x-raw,format=I420 ! x264enc speed-preset=medium pass=qual quantizer=23 key-int-max=15 bframes=0 ! <caps above> ! mp4mux faststart=true ! filesink location=<out>`. Use the `spawnSync` argument array, never a shell string.
+ffmpeg detection reads `ffmpeg -hide_banner -encoders` for `libx264`. GStreamer detection runs `gst-inspect-1.0 x264enc` and `gst-inspect-1.0 mp4mux`. GStreamer pipeline: `multifilesrc location=<dir>/f%05d.jpg index=0 stop-index=<count-1> caps=image/jpeg,framerate=<fps>/1 ! jpegdec ! videoconvert ! video/x-raw,format=I420,colorimetry=bt709 ! x264enc speed-preset=medium pass=qual quantizer=23 key-int-max=15 bframes=0 ! <caps above> ! mp4mux faststart=true ! filesink location=<out>`. Use the `spawnSync` argument array, never a shell string.
 
 - [ ] **Step 4: Run the tests**
 
@@ -284,16 +293,15 @@ Message: `Render mode: encode recorded frames to H.264 with ffmpeg or GStreamer,
 
 **Files:**
 - Create: `src/render/clock.js`, `src/render/record.mjs`
-- Modify: `src/render/extract.js` (optional `paths` option)
-- Test: `test/render/record.test.mjs`, `test/render/extract.test.mjs`
+- Modify: `src/render/capture.mjs` (export `waitForQuietSlide`)
+- Test: `test/render/record.test.mjs`
 
 **Interfaces:**
 - Consumes: `.slidev-page-<n>`, `window.__slidev__.nav.next()`.
 - Produces:
-  - `window.__pptxExtract(pageEl, canvas, { paths: true })` adds `node.elPath` to each node: a selector from the page root of `tag.class.class` steps joined by ` > `, with the pseudo-element appended for a pseudo-element's node. Without the option, the result is exactly as today.
   - `clipViewport(canvas) -> { width: 1920, height }`, `height` rounded to even.
-  - `recordClick({ browser, url, sel, canvas, hide, keep = null, show = [], tmpRoot, fps = 30, maxSeconds = 40, timeout = 30000, setup = async () => {} }) -> RecordResult`. `keep` is the selector of the picture's own element.
-  - `RecordResult`: `{ dir, count, fps, motionFrames, settled, changedText: string[], changedVisibly: boolean }`. `dir` holds `f%05d.jpg`, frame 0 being the state before the click. The caller removes `dir`.
+  - `recordClick({ browser, url, sel, canvas, tmpRoot, fps = 30, maxSeconds = 40, timeout = 30000, setup = async () => {} }) -> RecordResult`.
+  - `RecordResult`: `{ dir, count, fps, motionFrames, settled, changedVisibly }`. `dir` holds `f%05d.jpg`, frame 0 being the state before the click. The caller removes `dir`.
   - `MOTION_FRAMES = 12` (0.4 s at 30 fps).
 
 - [ ] **Step 1: Write the failing tests in `test/render/record.test.mjs`**
@@ -317,19 +325,15 @@ test("a CSS transition after the click is drawn but is not script motion", opts,
   assert.ok(r.changedVisibly);
 });
 
-test("what `hide` names stays out of the frames, including an element that only appears after the click", opts, async (t) => {
-  const r = await recordStub(t, CAPTION_APPEARS, { hide: [".caption"] });
-  assert.ok(!frameHasColor(r.dir, r.count - 1, CAPTION_COLOR));
+test("the whole slide is in the frames, including a text that appears after the click", opts, async (t) => {
+  const r = await recordStub(t, CAPTION_APPEARS);
+  assert.ok(!frameHasColor(r.dir, 0, CAPTION_COLOR));
+  assert.ok(frameHasColor(r.dir, r.count - 1, CAPTION_COLOR));
 });
 
-test("a selector that matches the picture's own element or an ancestor of it is not applied", opts, async (t) => {
-  const r = await recordStub(t, ANIMATE_RAF_1S, { hide: ["div", ".caption"], keep: ".map" });
-  assert.ok(r.changedVisibly);
-});
-
-test("a hidden text that changes after the click is reported", opts, async (t) => {
-  const r = await recordStub(t, CAPTION_CHANGES_AT_500MS, { hide: [".caption"] });
-  assert.deepEqual(r.changedText, [".caption"]);
+test("a click that changes nothing reports no visible change", opts, async (t) => {
+  const r = await recordStub(t, RAF_DRAWS_THE_SAME);
+  assert.equal(r.changedVisibly, false);
 });
 
 test("a page whose script never stops gives up at the cap", opts, async (t) => {
@@ -345,33 +349,27 @@ test("a clip keeps a 4:3 deck's shape, with even dimensions", () => {
 });
 ```
 
-Add to `test/render/extract.test.mjs`: with `{ paths: true }` a node has `elPath`, a pseudo-element's ends in `::after`, and without the option no node has `elPath`.
-
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `node --test test/render/record.test.mjs test/render/extract.test.mjs`
-Expected: FAIL, module not found and missing `elPath`.
+Run: `node --test test/render/record.test.mjs`
+Expected: FAIL, module not found.
 
 - [ ] **Step 3: Implement `src/render/clock.js`, loaded with `addInitScript` before the page's own scripts**
 
-Real time until `window.__startVirtualClock(rootSelector)`. Override `requestAnimationFrame`, `cancelAnimationFrame`, `performance.now`, `Date` (subclass, so `new Date()` and `Date.now()` follow), `setTimeout` and `clearTimeout`, using negative ids for virtual callbacks so a real id still cancels correctly. `window.__stepClock(dtMs)` advances the clock, runs due timers then due animation-frame callbacks with the virtual time, pauses every `document.getAnimations()` entry and moves its `currentTime` by `dtMs` (`finish()` when past its end), and returns `{ at, frames, timers, running, images, sinceMutation }`. A `MutationObserver` on the root records `lastMutation` and, past the first 5 steps, the targets of text changes.
+Real time until `window.__startVirtualClock(rootSelector)`. Override `requestAnimationFrame`, `cancelAnimationFrame`, `performance.now`, `Date` (subclass, so `new Date()` and `Date.now()` follow), `setTimeout` and `clearTimeout`, using negative ids for virtual callbacks so a real id still cancels correctly. `window.__stepClock(dtMs)` advances the clock, runs due timers then due animation-frame callbacks with the virtual time, pauses every `document.getAnimations()` entry and moves its `currentTime` by `dtMs` (`finish()` when past its end), and returns `{ at, frames, timers, running, images, sinceMutation }`. A `MutationObserver` on the root records `lastMutation`.
 
 - [ ] **Step 4: Implement `recordClick` in `src/render/record.mjs`**
 
-New context with `clipViewport(canvas)` and `deviceScaleFactor: 1`. Go to `url`, wait for `sel`, fonts and quiet using the existing wait. Add the hide stylesheet (`visibility:hidden!important`), first dropping any selector whose `closest` matches the kept picture element. Always hide `[data-pptx-layer="top"]` and leave out names in `show`. Start the clock, take frame 0 with CDP `Page.captureScreenshot` (`jpeg`, quality 92), call `nav.next()`, then step: if `images` is non-zero wait 60 ms of real time, take the frame, count `motionFrames` when `frames > 0`, stop when `frames === 0 && running === 0 && images === 0 && sinceMutation > 600`, or at `maxSeconds`. `changedVisibly`: frame 0 and the last frame differ. Close the context in a `finally`.
+New context with `clipViewport(canvas)` and `deviceScaleFactor: 1`. Go to `url`, wait for `sel`, fonts and quiet using the existing wait. Start the clock, take frame 0 with CDP `Page.captureScreenshot` (`jpeg`, quality 92), call `nav.next()`, then step: if `images` is non-zero wait 60 ms of real time, take the frame, count `motionFrames` when `frames > 0`, stop when `frames === 0 && running === 0 && images === 0 && sinceMutation > 600`, or at `maxSeconds`. `changedVisibly`: frame 0 and the last frame differ. Close the context in a `finally`.
 
-- [ ] **Step 5: Add the `paths` option to `extract.js`**
-
-`sources.get(n)` already holds each node's element and pseudo-element. Compute `elPath` only when the option is set.
-
-- [ ] **Step 6: Run the tests**
+- [ ] **Step 5: Run the tests**
 
 Run: `npm run test:render`
 Expected: PASS, skipping only what needs a missing tool.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
-Message: `Render mode: record a click frame by frame on a stepped clock, with native content left out`.
+Message: `Render mode: record a click frame by frame on a stepped clock`.
 
 ### Task 6: Slide plan
 
@@ -382,11 +380,11 @@ Message: `Render mode: record a click frame by frame on a stepped clock, with na
 **Interfaces:**
 - Consumes: scene nodes; `MOTION_FRAMES`.
 - Produces:
-  - `stateSignature(node) -> string`, for every kind. Includes kind, rect rounded to 0.5 px, and every other field except `id`, `above`, `elPath` and `label`, with `Buffer` values replaced by their sha1.
+  - `stateSignature(node) -> string`, for every kind. Includes kind, rect rounded to 0.5 px, and every other field except `id`, `above` and `label`, with `Buffer` values replaced by their sha1.
   - `mergeRuns(states: Node[][]) -> Run[]`, `Run = { node, from, to }`, in merged z-order.
-  - `clipTarget(before: Node[], after: Node[]) -> Node | null`: the largest `raster` node in `after` whose signature is not in `before`.
-  - `clickKind({ target, record, encoder }) -> { kind: "reveal" | "motion", reason: string | null }`.
-  - `planSlide(states, kinds) -> Segment[]`, `kinds[k]` being click `k`'s kind (`kinds[0]` unused). `Segment = { first, last, runs }`, where `first > 0` means the segment starts at a motion click. `from` and `to` in its runs are state numbers of the whole slide, as `effectsOf` expects.
+  - `pictureChanged(before: Node[], after: Node[]) -> boolean`: a `raster` node in `after` has a signature not in `before`.
+  - `clickKind({ changed, record, encoder }) -> { kind: "reveal" | "motion", reason: string | null }`.
+  - `planSlide(states, kinds) -> Segment[]`, `kinds[k]` being click `k`'s kind (`kinds[0]` unused). `Segment = { kind: "still", first, last, runs } | { kind: "clip", click }`. `from` and `to` in a still segment's runs are state numbers of the whole slide, as `effectsOf` expects.
   - `effectsOf(run, segment) -> [{ click, dir }]`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -424,26 +422,38 @@ test("when two states disagree on order, the later order wins by repeating the n
   assert.deepEqual(inState1, ["b", "a"]);
 });
 
-test("a clip replaces the largest picture that changed", () => {
-  const big = raster("new");
-  assert.equal(clipTarget([raster("old")], [raster("logo", 50), big]), big);
-  assert.equal(clipTarget([raster("same")], [raster("same")]), null);
+test("a changed picture is one whose signature was not there before", () => {
+  assert.equal(pictureChanged([raster("old")], [raster("logo", 50), raster("new")]), true);
+  assert.equal(pictureChanged([raster("same")], [raster("same")]), false);
+  assert.equal(pictureChanged([raster("same")], [raster("same"), box("a")]), false);
 });
 
 test("click kinds", () => {
   const motion = { motionFrames: 40, settled: true, changedVisibly: true };
-  assert.deepEqual(clickKind({ target: null, record: null, encoder: {} }), { kind: "reveal", reason: null });
-  assert.deepEqual(clickKind({ target: {}, record: { ...motion, motionFrames: 3 }, encoder: {} }), { kind: "reveal", reason: null });
-  assert.equal(clickKind({ target: {}, record: motion, encoder: {} }).kind, "motion");
-  assert.match(clickKind({ target: {}, record: motion, encoder: null }).reason, /no encoder/);
-  assert.match(clickKind({ target: {}, record: { ...motion, settled: false }, encoder: {} }).reason, /never settled/);
-  assert.match(clickKind({ target: {}, record: { ...motion, changedVisibly: false }, encoder: {} }).reason, /no visible change/);
+  assert.deepEqual(clickKind({ changed: false, record: null, encoder: {} }), { kind: "reveal", reason: null });
+  assert.deepEqual(clickKind({ changed: true, record: { ...motion, motionFrames: 3 }, encoder: {} }), { kind: "reveal", reason: null });
+  assert.equal(clickKind({ changed: true, record: motion, encoder: {} }).kind, "motion");
+  assert.match(clickKind({ changed: true, record: motion, encoder: null }).reason, /no encoder/);
+  assert.match(clickKind({ changed: true, record: { ...motion, settled: false }, encoder: {} }).reason, /never settled/);
+  assert.match(clickKind({ changed: true, record: { ...motion, changedVisibly: false }, encoder: {} }).reason, /no visible change/);
 });
 
-test("a motion click starts a new segment; later reveals stay on it", () => {
-  const states = [[box("a")], [box("a"), box("b")], [raster("x")], [raster("x"), box("c")]];
-  const segs = planSlide(states, [null, "reveal", "motion", "reveal"]);
-  assert.deepEqual(segs.map((s) => [s.first, s.last]), [[0, 1], [2, 3]]);
+const shape = (segs) => segs.map((s) => (s.kind === "clip" ? ["clip", s.click] : [s.first, s.last]));
+
+test("a motion click is a clip of its own, and the next reveal opens a still slide in its own state", () => {
+  const states = [[box("a")], [box("a"), box("b")], [raster("x")], [raster("x"), box("c")], [raster("x"), box("c"), box("d")]];
+  assert.deepEqual(shape(planSlide(states, [null, "reveal", "motion", "reveal", "reveal"])), [[0, 1], ["clip", 2], [3, 4]]);
+});
+
+test("two motion clicks in a row are two clips, with no still slide between", () => {
+  const states = [[raster("a")], [raster("b")], [raster("c")]];
+  assert.deepEqual(shape(planSlide(states, [null, "motion", "motion"])), [[0, 0], ["clip", 1], ["clip", 2]]);
+});
+
+test("a still slide's runs are numbered by the slide's states, and the state it opens in has no effect", () => {
+  const states = [[raster("a")], [raster("b")], [raster("b"), box("c")], [raster("b"), box("c"), box("d")]];
+  const still = planSlide(states, [null, "motion", "reveal", "reveal"])[2];
+  assert.deepEqual(still.runs.map((r) => effectsOf(r, still)), [[], [], [{ click: 1, dir: "in" }]]);
 });
 
 test("effects are numbered within the segment", () => {
@@ -460,18 +470,14 @@ Expected: FAIL, module not found.
 
 - [ ] **Step 3: Implement `src/render/animation-plan.mjs`**
 
-`mergeRuns` walks the states in order and keeps the merged list. For each node of a state, number duplicate signatures as `signaturesOf` does. If that numbered signature has a run that ended in the previous state and sits after the previous node's run in the merged list, extend it. Otherwise start a new run and insert it directly after the previous node's run, or at the start of the list. `clickKind` checks in order: no target, too few motion frames, no encoder, not settled, no visible change.
+`mergeRuns` walks the states in order and keeps the merged list. For each node of a state, number duplicate signatures as `signaturesOf` does. If that numbered signature has a run that ended in the previous state and sits after the previous node's run in the merged list, extend it. Otherwise start a new run and insert it directly after the previous node's run, or at the start of the list. `clickKind` checks in order: no changed picture, too few motion frames, no encoder, not settled, no visible change. `planSlide` opens a still segment at state 0; a motion click closes the current one and adds a clip; a reveal extends the current one, or opens one at its own state after a clip.
 
 - [ ] **Step 4: Run the tests**
 
 Run: `node --test test/animation-plan.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Apply the early checkpoint's result**
-
-Only if Task 3 found a full-slide picture cannot enter above a held clip: add a test that a click changing a full-slide picture on a segment after a clip starts a new segment, and implement it in `planSlide`. Otherwise skip this step.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 Message: `Render mode: plan an animated slide from its click states`.
 
@@ -482,9 +488,9 @@ Message: `Render mode: plan an animated slide from its click states`.
 - Test: `test/render/capture.test.mjs`, `test/video.test.mjs` or `test/render-scene.test.mjs`
 
 **Interfaces:**
-- Consumes: `recordClick`, `findEncoder`, `encodeClip`, `clipTarget`, `clickKind`, `compareImages`.
+- Consumes: `recordClick`, `findEncoder`, `encodeClip`, `pictureChanged`, `clickKind`, `compareImages`.
 - Produces: `captureClickStates({ baseUrl, browser, timeout, slidevVersion, record = recordClick, encoder = findEncoder(), notice = console.warn }) -> { canvas, slides }`. Each slide is one of:
-  - `{ index, sourceIndex, filepath, notes, transition, states: Scene[], clicks: Click[] }`, `clicks[k]` for `k >= 1`, `Click = { kind: "reveal" } | { kind: "motion", target, drop: Node[], clip: { data, poster, duration, natural } }`.
+  - `{ index, sourceIndex, filepath, notes, transition, states: Scene[], clicks: Click[] }`, `clicks[k]` for `k >= 1`, `Click = { kind: "reveal" } | { kind: "motion", clip: { data, poster, duration, natural } }`.
   - the existing `{ index, sourceIndex, filepath, error }`.
 
 - [ ] **Step 1: Write the failing tests in `test/render/capture.test.mjs`**
@@ -527,22 +533,23 @@ for (const [name, over, reason] of [
     const lines = [];
     const dir = fakeFrames();
     const { encoder, settled = true } = over;
-    const { slides } = await captureStates(t, PICTURE_CHANGES, { encoder, record: async () => ({ dir, count: 2, fps: 30, motionFrames: 40, settled, changedText: [], changedVisibly: true }), notice: (l) => lines.push(l) });
+    const { slides } = await captureStates(t, PICTURE_CHANGES, { encoder, record: async () => ({ dir, count: 2, fps: 30, motionFrames: 40, settled, changedVisibly: true }), notice: (l) => lines.push(l) });
     assert.equal(slides[0].clicks[1].kind, "reveal");
     assert.match(lines[0], new RegExp(`^Notice: slide 1 click 1: .*${reason.source}`));
     assert.equal(existsSync(dir), false);
   });
 }
 
-test("a hidden text that changes during motion is re-recorded in the clip and dropped from the native layer", opts, async (t) => {
-  const calls = [];
-  const { slides } = await captureStates(t, PICTURE_AND_CAPTION, { encoder: FAKE_ENCODER, record: fakeRecordReportingChange(calls, ".caption") });
-  assert.equal(calls.length, 2);
-  assert.deepEqual(calls[1].show, [".caption"]);
-  assert.equal(slides[0].clicks[1].drop.length, 1);
+test("a motion click keeps its clip, and its frames are removed", opts, async (t) => {
+  const dir = fakeFrames();
+  const { slides } = await captureStates(t, PICTURE_CHANGES, { encoder: FAKE_ENCODER, record: async () => ({ dir, count: 60, fps: 30, motionFrames: 40, settled: true, changedVisibly: true }) });
+  const { clip } = slides[0].clicks[1];
+  assert.equal(clip.duration, 2);
+  assert.equal(clip.poster.subarray(0, 2).toString("hex"), "ffd8");
+  assert.equal(existsSync(dir), false);
 });
 
-test("a clip's last frame unlike the picture is kept, with a notice", opts, async (t) => {
+test("a clip's last frame unlike the direct load is kept, with a notice", opts, async (t) => {
   const lines = [];
   const { slides } = await captureStates(t, PICTURE_CHANGES, { encoder: FAKE_ENCODER, record: fakeRecordWithOtherLastFrame, notice: (l) => lines.push(l) });
   assert.equal(slides[0].clicks[1].kind, "motion");
@@ -567,7 +574,7 @@ Expected: FAIL, `captureClickStates` is not exported.
 
 - [ ] **Step 3: Implement the capture changes**
 
-`captureSlide` takes a final `{ url, jpeg, paths } = {}`; with none of them set it behaves exactly as today. `elementShot` with `jpeg` uses `{ type: "jpeg", quality: 85 }` and sets `node.pictureExt = "jpg"` when the part shot covers at least half the canvas. `captureClickStates` sets up its page as `captureDeck` does and first opens `/1?print` and waits for the deck, because the first page of a fresh dev server can reload while Vite prepares its dependencies (a spike got a nearly empty first capture without this). It then opens `/<n>?clicks=0` for `clicksTotal` and captures each state, with `{ url, jpeg: true, paths: true }`. For each `k >= 1` with a `clipTarget` it calls `record` with `keep` set to the target's `elPath` and `hide` set to the `elPath` of every node after the target in state `k`, plus every node after the largest raster in state `k-1`, since native content that exists only before the click must stay out of the clip too. If it reports `changedText`, it records again with those as `show` and puts the matching nodes in `drop`. Then it applies `clickKind`, encodes and removes `dir` in a `finally`. The poster is frame 0; `duration` is `count / fps`; `natural` is `clipViewport(canvas)`. Compare the last frame with `target.png` through `compareImages` only when the target covers at least half the canvas: below similarity 0.95, print `Notice: slide N click K: the clip's last frame differs from the slide's picture (the page's live state differs from a fresh load, or a recording is wrong).` For a motion click, print `Notice: slide N click K: clip, S s, M MB.`
+`captureSlide` takes a final `{ url, jpeg } = {}`; with neither set it behaves exactly as today. `elementShot` with `jpeg` uses `{ type: "jpeg", quality: 85 }` and sets `node.pictureExt = "jpg"` when the part shot covers at least half the canvas. `captureClickStates` sets up its page as `captureDeck` does and first opens `/1?print` and waits for the deck, because the first page of a fresh dev server can reload while Vite prepares its dependencies (a spike got a nearly empty first capture without this). It then opens `/<n>?clicks=0` for `clicksTotal` and captures each state, with `{ url, jpeg: true }` and `screenshots: true`. For each `k >= 1` where `pictureChanged` holds it calls `record`, then applies `clickKind`, encodes and removes `dir` in a `finally`. The poster is frame 0; `duration` is `count / fps`; `natural` is `clipViewport(canvas)`. Compare the last frame with state `k`'s whole-slide screenshot through `compareImages`: below similarity 0.95, print `Notice: slide N click K: the clip's last frame differs from a fresh load of the slide (the page's live state differs from a fresh load, or a recording is wrong).` For a motion click, print `Notice: slide N click K: clip, S s, M MB.` Delete each state's `screenshot` once compared: it is not exported.
 
 - [ ] **Step 4: Implement the scene changes**
 
@@ -609,10 +616,9 @@ test("transitions: the forward half maps; anything else is null", () => {
 });
 
 // Helpers: slideOf(states, clicks = [], meta = {}) builds a captured slide; title, text, table, box and raster build nodes; `fail` throws if called.
-test("a slide with no clicks is one spec with no effects, not marked animated", () => {
+test("a slide with no clicks is one spec with no effects", () => {
   const specs = slideSpecs(slideOf([[title("T"), box("a")]]), STYLE, { notice: fail });
   assert.equal(specs.length, 1);
-  assert.ok(!specs[0].animated);
   assert.ok(specs[0].shapes.every((s) => !s.effects));
 });
 
@@ -632,28 +638,32 @@ test("a title that changes on a reveal becomes plain text shapes", () => {
   assert.equal(spec.shapes.filter((s) => s.effects?.length).length, 2);
 });
 
-test("a motion click: a new spec, the clip where the picture was, native content above, no transition", () => {
-  const target = raster("map");
-  const states = [[raster("old"), title("T")], [target, title("T")]];
-  const clicks = [null, { kind: "motion", target, drop: [], clip: CLIP }];
+test("a motion click: a slide holding only the clip, which fills it and starts by itself, with no transition", () => {
+  const states = [[raster("old"), title("T")], [raster("map"), title("T")]];
+  const clicks = [null, { kind: "motion", clip: CLIP }];
   const specs = slideSpecs(slideOf(states, clicks, { transition: "fade", notes: "N" }), STYLE, { notice: fail });
   assert.equal(specs.length, 2);
   assert.equal(specs[0].transition, "fade");
   assert.equal(specs[1].transition, undefined);
-  assert.equal(specs[1].shapes[0].kind, "video");
-  assert.equal(specs[1].shapes[0].autoplay, true);
-  assert.equal(specs[1].shapes[0].muted, true);
-  assert.equal(specs[1].shapes[0].loop, false);
-  assert.equal(specs[1].shapes[0].poster.ext, "jpg");
+  assert.equal(specs[1].shapes.length, 1);
+  assert.equal(specs[1].placeholders.title, undefined);
+  const [video] = specs[1].shapes;
+  assert.equal(video.kind, "video");
+  assert.equal(video.autoplay, true);
+  assert.equal(video.muted, true);
+  assert.equal(video.loop, false);
+  assert.equal(video.poster.ext, "jpg");
+  assert.deepEqual([video.x, video.y, video.w, video.h], [0, 0, STYLE.geometry.w, STYLE.geometry.h]);
   assert.deepEqual(specs.map((s) => s.notes), ["N", "N"]);
 });
 
-test("a text dropped for changing during motion is not on the clip's slide", () => {
-  const target = raster("map");
-  const caption = text("Searching");
-  const clicks = [null, { kind: "motion", target, drop: [caption], clip: CLIP }];
-  const specs = slideSpecs(slideOf([[raster("old")], [target, caption]], clicks), STYLE, { notice: fail });
-  assert.ok(specs[1].shapes.every((s) => s.kind !== "text"));
+test("a reveal after a clip: a new slide opens in that state with a fade, and only later reveals are effects", () => {
+  const states = [[raster("a")], [raster("b")], [raster("b"), box("c")], [raster("b"), box("c"), box("d")]];
+  const clicks = [null, { kind: "motion", clip: CLIP }, { kind: "reveal" }, { kind: "reveal" }];
+  const specs = slideSpecs(slideOf(states, clicks), STYLE, { notice: fail });
+  assert.equal(specs.length, 3);
+  assert.equal(specs[2].transition, "fade");
+  assert.deepEqual(specs[2].shapes.filter((s) => s.effects?.length).map((s) => s.effects), [[{ click: 1, dir: "in" }]]);
 });
 
 test("a deck's own video on a slide with clicks stays a video with its own autoplay and loop", () => {
@@ -688,7 +698,7 @@ Expected: FAIL, module not found and new cases failing.
 
 - [ ] **Step 3: Implement `src/render/animated.mjs`**
 
-For each segment: merge the runs, set `node.effects = effectsOf(run, segment)` on a copy of each run's node, delete `role` from a title whose run does not span the segment, replace the motion click's `target` run with a full-canvas video node (`fit: "fill"`, `natural: clip.natural`, `posterImage: { data: clip.poster, ext: "jpg" }`, `autoplay: true`, `loop: false`, `muted: true`), remove `drop` nodes, and call `sceneToSpec`. Set `spec.animated` when a segment has more than one state or a clip, `spec.transition` on the first segment only, and `spec.notes` on all.
+For each segment. A still segment: merge the runs, set `node.effects = effectsOf(run, segment)` on a copy of each run's node, delete `role` from a title whose run does not span the segment, and call `sceneToSpec`; `spec.transition` is the deck's on the slide's first segment and `"fade"` on a later one. A clip segment: `sceneToSpec` with one node, a full-canvas video (`fit: "fill"`, `natural: clip.natural`, `posterImage: { data: clip.poster, ext: "jpg" }`, `autoplay: true`, `loop: false`, `muted: true`, `alt: "Slide N, click K"`), no background and no transition. Set `spec.animated` on every spec, so a deck's own video uses the form the web plays, and `spec.notes` on all.
 
 - [ ] **Step 4: Wire up the flow**
 
@@ -748,11 +758,12 @@ test("slide 1's v-clicks and slide 2's table each step one at a time", opts, asy
   assert.match(one, /<\/p:clrMapOvr><p:transition><p:fade\/><\/p:transition>/);
 });
 
-test("the motion click is a clip that starts by itself, with no click step and no transition", { ...opts, skip: opts.skip || (findEncoder() ? false : "no encoder installed") }, async (t) => {
+test("the motion click is a slide holding only a clip that starts by itself, with no click step and no transition", { ...opts, skip: opts.skip || (findEncoder() ? false : "no encoder installed") }, async (t) => {
   const { z } = await exportFixture(t);
   const clip = slideTexts(z)[3];
   assert.match(clip, /nodeType="afterEffect"/);
   assert.doesNotMatch(clip, /clickEffect|<p:transition/);
+  assert.equal(count(clip, /<p:(sp|pic|graphicFrame)>/g), 1);
   const mp4 = z.names.find((n) => n.endsWith(".mp4"));
   assert.equal(z.buffer(mp4).subarray(4, 8).toString(), "ftyp");
 });
@@ -776,7 +787,7 @@ Message: `Tests: an animated fixture deck, exported end to end`.
 
 - [ ] **Step 6: Midway checkpoint (needs the user)**
 
-From the session that holds the conversation: export a copy of the test deck trimmed to its table slide and its route search slide with `--animations`, ask the user to upload it in the browser pane, and step through with the keyboard. Expected: the table steps one column per click with no flash, and the clip starts by itself. Fix what fails, with a test, before Task 10.
+From the session that holds the conversation: export a copy of the test deck trimmed to its table slide and its route search slide with `--animations`, ask the user to upload it in the browser pane, and step through with the keyboard. Expected: the table steps one column per click with no flash, the clip starts by itself with its text inside it, and the next key press opens the native still slide. Fix what fails, with a test, before Task 10.
 
 ### Task 10: README, full deck on the web, and the PR
 
@@ -789,7 +800,7 @@ From the session that holds the conversation: export a copy of the test deck tri
 
 - [ ] **Step 1: Write the README section "Animations (`--animations`)"**
 
-Cover: the flag and that it implies render mode; what becomes what; that it targets PowerPoint for the web, and that desktop PowerPoint and Impress should open the file but were not the target; to use a keyboard or clicker, because a mouse click on a full-slide clip restarts it; the brief blank at a motion click; the slide count; the need for `ffmpeg` or GStreamer with H.264, and the Fade fallback; what cannot carry over (hover highlights, live sliders, table scrolling, motion with no click); the risks from the spec, in plain words; that the default export stays the editable copy. Change the line near `README.md:144` that says animations and transitions are not carried over. Add `npm --prefix test/fixtures/animated-deck ci` to the development section.
+Cover: the flag and that it implies render mode; what becomes what, including that on a clip slide the text and tables are part of the video and that still slides stay native; why: on the web, native shapes above a later clip vanish, which also applies to a deck's own video with content above it; that it targets PowerPoint for the web, and that desktop PowerPoint and Impress should open the file but were not the target; to use a keyboard or clicker, because a mouse click on a full-slide clip restarts it; the slide count; the need for `ffmpeg` or GStreamer with H.264, and the Fade fallback; what cannot carry over (hover highlights, live sliders, table scrolling, motion with no click); the risks from the spec, in plain words; that the default export stays the editable copy. Change the line near `README.md:144` that says animations and transitions are not carried over. Add `npm --prefix test/fixtures/animated-deck ci` to the development section.
 
 - [ ] **Step 2: Check the default export is unchanged**
 
@@ -803,7 +814,7 @@ Expected: both convert; the number of `anim:` effects per page matches the plan.
 
 - [ ] **Step 4: Run the final web check (needs the user)**
 
-From the session that holds the conversation: ask the user to upload the export in the browser pane. Step through all 15 clicks with the keyboard, compare each with Slidev's state for that click, and read the Animation Pane on any slide that misbehaves. Check the clips on slides 2, 4, 7 and 10, the blank, and going back with the left arrow. Ask the user to repeat the show in their usual browser. Record the file size.
+From the session that holds the conversation: ask the user to upload the export in the browser pane. Step through all 15 clicks with the keyboard, compare each with Slidev's state for that click, and read the Animation Pane on any slide that misbehaves. Check the clips on slides 2, 4, 7 and 10, the first reveal after each clip, and going back with the left arrow. Ask the user to repeat the show in their usual browser. Record the file size.
 
 - [ ] **Step 5: Run everything**
 

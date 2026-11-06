@@ -4,13 +4,13 @@
 // config shape and bin/cli.mjs for the command-line wrapper.
 
 import { readFileSync, existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
 import { resolve, dirname, basename, extname } from "node:path";
 import { mergeConfig } from "./config.mjs";
 import { splitSlides, parseSlide } from "./parse.mjs";
 import { layoutDeck, deckStyle } from "./layout.mjs";
 import { writePptx } from "./ooxml/index.mjs";
 import { fontResolver } from "./fonts.mjs";
+import { writeAtomic } from "./write.mjs";
 
 const LOGO_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif"]);
 
@@ -99,7 +99,7 @@ export async function convert(options) {
   });
 
   const outputPath = resolve(options.outputPath || `${basename(inputPath, extname(inputPath))}-editable.pptx`);
-  await writeFile(outputPath, buffer);
+  await writeAtomic(outputPath, buffer);
   const clips = rendered?.clips ?? 0;
   onProgress({ event: "done", path: outputPath, slides: specs.length, clips, bytes: buffer.length });
 

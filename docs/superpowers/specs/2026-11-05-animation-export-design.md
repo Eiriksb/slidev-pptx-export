@@ -46,6 +46,8 @@ a slide's timing, which makes it the quickest way to check a timeline.
 | Animated GIF, including a one-shot GIF | Stays on its first frame |
 | 40 timed full-slide pictures on one slide | The slide show hung and needed a reload |
 | Morph | Box ended in the right place; the motion itself could not be sampled by screenshot |
+| The finished export of the test deck, run from slide 1 with the Right arrow | All 24 key presses (9 slide changes, 15 clicks) gave Slidev's states in order; all 7 clips started by themselves and held their last frame; no native shape vanished |
+| Going back with the Left arrow | Works; each clip slide takes one extra press, as the first goes back through the clip's own step. Reveals undo one per press |
 | Video colours | GStreamer's default conversion plays brighter than the pictures around it. In real Chrome, whole-frame means against a source of 201.6, 203.8, 193.6: default 213.5, 215.6, 205.3; `colorimetry=bt709` 200.7, 205.3, 194.1; ffmpeg's plain `yuv420p` 201.6, 203, 193.6 |
 
 Found along the way:

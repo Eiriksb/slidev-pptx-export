@@ -37,7 +37,7 @@ function usableLogo(logo, configDir) {
  * @param {boolean} [options.embedFonts] - embed the fonts the slides use (TrueType, licence permitting; see README "Fonts")
  * @param {boolean|{screenshots?: boolean, animations?: boolean}} [options.render] - render the deck with its own Slidev in Chromium and convert what is drawn (see README "Render mode"). `animations`, here or as `config.render.animations`, implies render mode and plays the deck's clicks and transitions in the slide show (see README "Animations")
  * @returns {Promise<{ outputPath: string, slideCount: number, translatedCharts: number, unresolvedCharts: string[], screenshots?: (Buffer|null)[] }>}
- *   `screenshots` (render mode with `screenshots: true`): Slidev's own screenshot of each exported slide, null for a slide exported from markdown
+ *   `screenshots` (render mode with `screenshots: true`): Slidev's own screenshot of each exported slide, null for a slide exported from markdown, and all null with animations on
  */
 export async function convert(options) {
   const inputPath = resolve(options.inputPath);

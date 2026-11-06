@@ -65,7 +65,8 @@ await convert({ inputPath: "slides.md", outputPath: "slides-show.pptx", render: 
 ```
 
 `render: { screenshots: true }` also returns Slidev's own screenshot of each exported slide as
-`result.screenshots` (`null` for a slide exported from markdown), which the visual check uses.
+`result.screenshots` (`null` for a slide exported from markdown), which the visual check uses. With
+animations on they are all `null`: a slide there shows several states, so no one screenshot matches it.
 
 ## Render mode (`--render`)
 
@@ -181,14 +182,18 @@ What becomes what:
 - A click that only shows, hides or changes content (`v-click`, a `$clicks`-driven component, a table
   that gains a column) is a native Fade on the same slide. Text and tables stay native.
 - A click after which the page moves by script for a while (a map flying, a route being drawn, anything
-  run by `requestAnimationFrame`) is recorded frame by frame and becomes a slide of its own holding a
-  video of the whole slide, which starts by itself and holds its last frame. Everything on that slide,
+  run by `requestAnimationFrame` or `setInterval`) and a picture on the slide changes (a map, a canvas,
+  an SVG drawing) is recorded frame by frame and becomes a slide of its own holding a
+  video of the whole slide, which starts by itself and holds its last frame. Script motion that changes
+  only text or boxes (a number counting up) is a Fade to its end state. Everything on that slide,
   text and tables included, is part of the video: on PowerPoint for the web, native shapes above a
   video vanish on later video slides of a show, so there is nothing above it. The next click opens a
   native slide again, fading in.
-- The deck's `transition` becomes PowerPoint's Fade for `fade` and `fade-out`, and Push for
-  `slide-left`, `-right`, `-up` and `-down`. Others (`view-transition`, custom ones) get none, with a
-  notice.
+- A click that changes the slide's background also opens a new slide, fading in: PowerPoint can't
+  change a background on a click.
+- The deck's `transition` (a name, or `{ name }`) becomes PowerPoint's Fade for `fade` and `fade-out`,
+  and Push for `slide-left`, `-right`, `-up` and `-down`. Others (`view-transition`, custom ones) get
+  none, with a notice.
 - A deck therefore has more PowerPoint slides than Slidev slides: one more per click that moves.
   Speaker notes are on all of them.
 - Nothing goes on the slide master, and the deck's own videos stay videos (`--videos` doesn't apply).
@@ -201,7 +206,8 @@ Recording a click needs **ffmpeg** with `libx264`, or **GStreamer** with `x264en
 Debian and Ubuntu: `gstreamer1.0-plugins-ugly` and `gstreamer1.0-plugins-good`). Without one, such a
 click is a Fade to its end state, with a notice naming what to install. Each recorded click prints its
 length and size; the test deck's took 2 to 15 seconds and 0.6 to 3.6 MB each. An export takes a few
-minutes, mostly recording.
+minutes, mostly recording. A recording waits for its page as long as `render: { timeout }` (at least
+30 s), and a click whose page is still moving after 40 s is a Fade, with a notice.
 
 What can't carry over: hover highlights, live sliders and other controls, scrolling inside a table, and
 motion that runs when a slide opens without a click (the slide shows its settled state).

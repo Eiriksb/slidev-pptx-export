@@ -23,8 +23,9 @@ export function findEncoder({ run = spawnSync } = {}) {
 // The command for frames `<dir>/f%05d.jpg`. GStreamer needs telling the colours after videoconvert: a
 // JPEG's range otherwise reaches the clip unconverted, and it plays brighter than the pictures around
 // it. It needs no h264parse when x264enc is asked for avc directly, and h264parse is often missing.
+// Both tools read the frames' path as a printf pattern, so a % in the folder's own name is doubled.
 export function encoderArgs(kind, { dir, count, fps, out }) {
-  const frames = join(dir, "f%05d.jpg");
+  const frames = join(dir.replace(/%/g, "%%"), "f%05d.jpg");
   if (kind === "ffmpeg") {
     return {
       bin: "ffmpeg",

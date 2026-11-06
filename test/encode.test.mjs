@@ -11,8 +11,8 @@ const TINY_JPEG = Buffer.from(
   "base64",
 );
 
-function makeFrames(t, count) {
-  const dir = mkdtempSync(join(tmpdir(), "pptx-encode-test-"));
+function makeFrames(t, count, prefix = "pptx-encode-test-") {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   for (let i = 0; i < count; i++) writeFileSync(join(dir, `f${String(i).padStart(5, "0")}.jpg`), TINY_JPEG);
   return { dir, count, fps: 30 };
@@ -73,3 +73,14 @@ test("a real encode gives an MP4, when an encoder is installed", { skip: findEnc
   const data = encodeClip(findEncoder(), makeFrames(t, 10));
   assert.equal(data.subarray(4, 8).toString(), "ftyp");
 });
+
+test("ffmpeg reads a % in the frames' folder as a %, not as part of its pattern", () => {
+  const { args } = encoderArgs("ffmpeg", { dir: "/tmp/a%b", count: 3, fps: 30, out: "/o.mp4" });
+  assert.ok(args.includes("/tmp/a%%b/f%05d.jpg"));
+});
+
+test("a real encode from a folder whose name has a %, a ! and a space, when an encoder is installed", { skip: findEncoder() ? false : "no encoder installed" }, (t) => {
+  const data = encodeClip(findEncoder(), makeFrames(t, 4, "pptx 100% ok! "));
+  assert.equal(data.subarray(4, 8).toString(), "ftyp");
+});
+

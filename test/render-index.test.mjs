@@ -403,3 +403,17 @@ test("with animations on: a deck that isn't 16:9 keeps its shape", async () => {
   assert.ok(Math.abs(config.slide.height / config.slide.width - 0.75) < 0.001);
 });
 
+test("with animations on, asking for animated pictures of videos gets a notice that they stay videos", async () => {
+  const { args } = setup("# One\n", { userConfig: { render: { animations: true, videos: "animated" } } });
+  const slides = [stateSlide(1, 0, scene(1, 0, "One"))];
+  const { warnings } = await withWarnings(() => renderSpecs({ ...args, deps: animatedDeps(args, slides) }));
+  assert.ok(warnings.includes("Notice: --videos animated (render.videos) doesn't apply with animations: videos stay videos, which PowerPoint for the web plays."), warnings.join("\n"));
+});
+
+test("with animations on, videos: native says nothing", async () => {
+  const { args } = setup("# One\n", { userConfig: { render: { animations: true, videos: "native" } } });
+  const slides = [stateSlide(1, 0, scene(1, 0, "One"))];
+  const { warnings } = await withWarnings(() => renderSpecs({ ...args, deps: animatedDeps(args, slides) }));
+  assert.ok(!warnings.some((w) => /render\.videos/.test(w)), warnings.join("\n"));
+});
+

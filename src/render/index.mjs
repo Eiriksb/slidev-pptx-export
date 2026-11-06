@@ -148,6 +148,7 @@ const chartsIn = (specs) => specs.reduce((n, s) => n + (s.shapes || []).filter((
 // An animated export: nothing goes on the master, since a shape there can't take part in a slide's
 // clicks, and videos stay videos, since animated pictures don't play on PowerPoint for the web.
 function animatedResult(captured, { inputPath, parsed, codeStore, config, style, sceneStyle }) {
+  if (config.render?.videos === "animated") console.warn("Notice: --videos animated (render.videos) doesn't apply with animations: videos stay videos, which PowerPoint for the web plays.");
   const specs = [];
   for (const slide of captured.slides) {
     if (slide.error) {

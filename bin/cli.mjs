@@ -11,7 +11,7 @@
 //
 // --videos (render mode): videos LibreOffice Impress can't show (slide content over them, a slide's
 // second video) become looping animated pictures (animated, the default; needs ffmpeg) or stay
-// videos (native: for PowerPoint only), see README.
+// videos (native: for PowerPoint only), see README. With --animations, videos always stay videos.
 //
 // --animations implies --render, and plays the deck's clicks and slide transitions in the slide show on
 // PowerPoint for the web. A click whose page moves by script needs ffmpeg or GStreamer, see README.

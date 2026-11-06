@@ -165,6 +165,56 @@ Render mode needs the deck's dependencies installed (`npm install` in the deck f
 `playwright-chromium`, then `playwright`, each first in the deck folder and then next to this
 package. It takes roughly 10–30 seconds per deck.
 
+### Choosing the browser and ffmpeg
+
+By default the browser is Playwright's Chromium. To drive another Chromium-family browser (Chrome, Edge,
+Chromium from a package manager) name its executable, in `pptx.config.mjs` or the environment:
+
+```js
+export default { render: { browser: "/usr/bin/chromium", ffmpeg: "/opt/ffmpeg/bin/ffmpeg" } };
+```
+
+```bash
+SLIDEV_PPTX_BROWSER=/usr/bin/chromium SLIDEV_PPTX_FFMPEG=/opt/ffmpeg/bin/ffmpeg \
+  npx slidev-pptx-export slides.md slides-editable.pptx --render
+```
+
+- `render.browser` / `SLIDEV_PPTX_BROWSER` is driven through `playwright-core`, so `playwright-chromium`
+  and Playwright's own download aren't needed. `playwright-chromium` and `playwright` are still tried
+  first when no browser is named.
+- `render.ffmpeg` / `SLIDEV_PPTX_FFMPEG` is the ffmpeg used for recorded clips (`--animations`) and for
+  the animated pictures of a deck's own videos. If the named one is missing or lacks `libx264`, the
+  export uses `ffmpeg` on the PATH, then GStreamer.
+- A key in the config wins over its environment variable.
+
+### Progress (`--progress json`)
+
+With `--progress json` stdout carries only the export's progress, one JSON object per line, for a program
+that runs the exporter and shows it. What the export says for people (`Notice:` and `Warning:` lines,
+errors) stays on stderr.
+
+| `event` | When | Other fields |
+| --- | --- | --- |
+| `start` | the deck is open | `slides` |
+| `slide` | a slide is being captured | `slide`, `states` (1 + its clicks, with `--animations`) |
+| `state` | one state of a slide is captured | `slide`, `state` (0 is the first) |
+| `record` | a click is being recorded | `slide`, `click` |
+| `clip` | a click's recording is encoded | `slide`, `click`, `seconds`, `bytes` |
+| `notice` | the export printed a warning | `text` |
+| `write` | the file is being written | |
+| `done` | the file is written | `path`, `slides`, `clips`, `bytes` |
+| `error` | the export failed (always the last line) | `message` |
+
+The `.pptx` is written as `<out>.partial` and renamed when complete, so a file with the final name is
+whole.
+
+### From a .sptx
+
+[Stagepack](https://github.com/Eiriksb/stagepack) packs a Slidev presentation into one `.sptx` file. Its
+installers bring this exporter, a headless browser and ffmpeg, and add *Export to PowerPoint (editable)*
+and *Export to PowerPoint (with animations)* to the `.sptx` right-click menu. They use the options above
+to name the browser and ffmpeg they installed and to follow the export's progress.
+
 ## Animations (`--animations`)
 
 ```bash

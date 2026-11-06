@@ -9,6 +9,7 @@ import { loadChromium } from "./browser.mjs";
 import { captureDeck } from "./capture.mjs";
 import { captureClickStates } from "./click-states.mjs";
 import { slideSpecs } from "./animated.mjs";
+import { findEncoder as findClipEncoder } from "./encode.mjs";
 import { animateVideos as animateSlideVideos, hasFfmpeg, videosToAnimate } from "./animate.mjs";
 import { pictureNotice, sceneNotices, sceneToSpec, shapesOf, unitsFor } from "./scene.mjs";
 import { deckStyle, layoutOne, groupedBarChart } from "../layout.mjs";
@@ -110,13 +111,14 @@ export function uncoveredSignatures(scenes, repeated) {
 
 // Videos LibreOffice Impress can't show (one with slide content over it, a slide's second video)
 // become looping animated pictures (see animate.mjs), unless `mode` is "native". Without ffmpeg they
-// stay videos, with a notice. `deps`: { gif, rate } stand-ins for ffmpeg (tests).
+// stay videos, with a notice. `deps`: { gif, rate } stand-ins for ffmpeg (tests); `bin`: the ffmpeg to run.
 function animateVideos(scenes, mode, deps = {}) {
   if (mode === "native") return;
-  const stub = deps.gif ? { gif: deps.gif, rate: deps.rate || (() => 25) } : {};
+  const bin = deps.bin || "ffmpeg";
+  const stub = deps.gif ? { gif: deps.gif, rate: deps.rate || (() => 25), bin } : { bin };
   for (const s of scenes) {
     if (!videosToAnimate(s.nodes).length) continue;
-    if (!stub.gif && !hasFfmpeg()) {
+    if (!stub.gif && !hasFfmpeg(bin)) {
       console.warn(`Notice: slide ${s.index}: videos LibreOffice can't show stay videos (no ffmpeg to make them animated pictures).`);
       continue;
     }
@@ -164,12 +166,13 @@ function animatedResult(captured, { inputPath, parsed, codeStore, config, style,
 }
 
 export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, codeStore, screenshots = false, deps = {} }) {
-  const { start = startDeckServer, chromiumFor = loadChromium, capture = captureDeck, captureStates = captureClickStates } = deps;
+  const { start = startDeckServer, chromiumFor = loadChromium, capture = captureDeck, captureStates = captureClickStates, findEncoder = findClipEncoder } = deps;
   const unused = UNUSED_KEYS.filter((k) => userConfig[k] != null);
   if (unused.length) console.warn(`Notice: render mode ignores ${unused.join(", ")} from pptx.config.mjs - the rendered page already shows them.`);
 
   // Playwright and its Chromium first: a missing package or browser fails before Slidev starts.
   const executablePath = config.render?.browser ?? process.env.SLIDEV_PPTX_BROWSER;
+  const ffmpeg = config.render?.ffmpeg ?? process.env.SLIDEV_PPTX_FFMPEG;
   const browserOptions = executablePath ? { executablePath } : undefined;
   const chromium = await chromiumFor(dirname(inputPath), browserOptions);
   let browser;
@@ -183,7 +186,7 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
     const server = await start({ inputPath });
     try {
       const options = { baseUrl: server.url, browser, timeout: config.render?.timeout ?? 15000, slidevVersion: server.version };
-      captured = config.render?.animations ? await captureStates(options) : await capture({ ...options, screenshots });
+      captured = config.render?.animations ? await captureStates({ ...options, encoder: findEncoder({ ffmpeg }) }) : await capture({ ...options, screenshots });
     } catch (err) {
       // A deck that fails to build or boot shows up here; Slidev's own output says why.
       const output = server.log();
@@ -206,7 +209,7 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
   if (config.render?.animations) return animatedResult(captured, { inputPath, parsed, codeStore, config, style, sceneStyle });
 
   const rendered = captured.slides.filter((s) => !s.error);
-  animateVideos(rendered, config.render?.videos ?? "animated", { gif: deps.gif, rate: deps.rate });
+  animateVideos(rendered, config.render?.videos ?? "animated", { gif: deps.gif, rate: deps.rate, bin: ffmpeg });
   // Resolver charts first: a resolved chart is a chart, never a shared picture on the master.
   for (const s of rendered) {
     for (const node of s.nodes) if (node.kind === "chart" || node.kind === "raster") resolveChart(node, config, style);

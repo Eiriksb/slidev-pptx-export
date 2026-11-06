@@ -444,3 +444,36 @@ test("a named browser (render.browser or SLIDEV_PPTX_BROWSER) is passed to chrom
     else process.env.SLIDEV_PPTX_BROWSER = saved;
   }
 });
+
+test("render.ffmpeg is the program for animated pictures", async () => {
+  const video = { kind: "video", data: Buffer.from("v"), muted: true, rect: { x: 0, y: 0, w: 400, h: 300 }, natural: { w: 400, h: 300 }, duration: 2, label: "clip" };
+  const cover = { kind: "box", rect: { x: 10, y: 10, w: 100, h: 100 }, fill: C("FFFFFF") };
+  const { args } = setup("# One\n", { userConfig: { render: { ffmpeg: "/opt/ff/ffmpeg" } }, slides: [scene(1, 0, "One", [video, cover])] });
+  const seen = [];
+  await withWarnings(() => renderSpecs({ ...args, deps: { ...args.deps, gif: (d, o) => { seen.push(o.bin); return Buffer.from("g"); } } }));
+  assert.deepEqual(seen, ["/opt/ff/ffmpeg"]);
+});
+
+test("render.ffmpeg is the program for recorded clips", async () => {
+  const { args } = setup("# One\n", { userConfig: { render: { animations: true, ffmpeg: "/opt/ff/ffmpeg" } } });
+  let encoder;
+  const deps = { ...animatedDeps(args, [stateSlide(1, 0, scene(1, 0, "One"))]), findEncoder: (o) => ({ kind: "ffmpeg", bin: o.ffmpeg }) };
+  const states = deps.captureStates;
+  deps.captureStates = async (o) => { encoder = o.encoder; return states(o); };
+  await withWarnings(() => renderSpecs({ ...args, deps }));
+  assert.deepEqual(encoder, { kind: "ffmpeg", bin: "/opt/ff/ffmpeg" });
+});
+
+test("SLIDEV_PPTX_FFMPEG names the program when the config does not", async () => {
+  const saved = process.env.SLIDEV_PPTX_FFMPEG;
+  process.env.SLIDEV_PPTX_FFMPEG = "/env/ffmpeg";
+  try {
+    const { args } = setup("# One\n", { userConfig: { render: { animations: true } } });
+    const seen = [];
+    const deps = { ...animatedDeps(args, [stateSlide(1, 0, scene(1, 0, "One"))]), findEncoder: (o) => { seen.push(o.ffmpeg); return null; } };
+    await withWarnings(() => renderSpecs({ ...args, deps }));
+    assert.deepEqual(seen, ["/env/ffmpeg"]);
+  } finally {
+    if (saved === undefined) delete process.env.SLIDEV_PPTX_FFMPEG; else process.env.SLIDEV_PPTX_FFMPEG = saved;
+  }
+});

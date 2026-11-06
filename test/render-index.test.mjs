@@ -19,8 +19,10 @@ function setup(md, { userConfig = {}, slides, canvas = { w: 980, h: 552 }, captu
   const calls = { started: 0, stopped: 0, closed: 0 };
   const browser = { close: async () => { calls.closed++; } };
   const deps = {
-    chromiumFor: async () => ({
-      launch: async () => {
+    chromiumFor: async (dir, opts) => ({
+      launch: async (options) => {
+        calls.chromiumForArgs = opts;
+        calls.launchArgs = options;
         if (launchError) throw launchError;
         return browser;
       },
@@ -417,3 +419,28 @@ test("with animations on, videos: native says nothing", async () => {
   assert.ok(!warnings.some((w) => /render\.videos/.test(w)), warnings.join("\n"));
 });
 
+
+test("a named browser (render.browser or SLIDEV_PPTX_BROWSER) is passed to chromiumFor and launch; without one, no executablePath", async () => {
+  const saved = process.env.SLIDEV_PPTX_BROWSER;
+  try {
+    delete process.env.SLIDEV_PPTX_BROWSER;
+    const none = setup("# A\n", { slides: [scene(1, 0, "A")] });
+    await renderSpecs(none.args);
+    assert.deepEqual(none.calls.launchArgs ?? {}, {});
+    assert.equal(none.calls.chromiumForArgs?.executablePath, undefined);
+
+    const cfg = setup("# A\n", { userConfig: { render: { browser: "/opt/shell" } }, slides: [scene(1, 0, "A")] });
+    await renderSpecs(cfg.args);
+    assert.deepEqual(cfg.calls.launchArgs, { executablePath: "/opt/shell" });
+    assert.deepEqual(cfg.calls.chromiumForArgs, { executablePath: "/opt/shell" });
+
+    process.env.SLIDEV_PPTX_BROWSER = "/opt/env-shell";
+    const env = setup("# A\n", { slides: [scene(1, 0, "A")] });
+    await renderSpecs(env.args);
+    assert.deepEqual(env.calls.launchArgs, { executablePath: "/opt/env-shell" });
+    assert.deepEqual(env.calls.chromiumForArgs, { executablePath: "/opt/env-shell" });
+  } finally {
+    if (saved === undefined) delete process.env.SLIDEV_PPTX_BROWSER;
+    else process.env.SLIDEV_PPTX_BROWSER = saved;
+  }
+});

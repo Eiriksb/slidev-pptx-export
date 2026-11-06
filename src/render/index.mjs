@@ -169,10 +169,12 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
   if (unused.length) console.warn(`Notice: render mode ignores ${unused.join(", ")} from pptx.config.mjs - the rendered page already shows them.`);
 
   // Playwright and its Chromium first: a missing package or browser fails before Slidev starts.
-  const chromium = await chromiumFor(dirname(inputPath));
+  const executablePath = config.render?.browser ?? process.env.SLIDEV_PPTX_BROWSER;
+  const browserOptions = executablePath ? { executablePath } : undefined;
+  const chromium = await chromiumFor(dirname(inputPath), browserOptions);
   let browser;
   try {
-    browser = await chromium.launch();
+    browser = await chromium.launch(browserOptions);
   } catch (err) {
     throw new Error(`render mode could not launch Playwright's Chromium (${String(err.message || err).split("\n")[0]}) - run \`npx playwright install chromium\`.`, { cause: err });
   }

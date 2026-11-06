@@ -332,3 +332,22 @@ test("an SVG image keeps its SVG bytes next to the PNG", () => {
   assert.equal(shape.svg, svg);
   assert.equal(shape.data, png);
 });
+
+test("a picture that is a JPEG says so; one with no extension of its own is a PNG", () => {
+  const picture = (extra) => ({ kind: "raster", rect: { x: 0, y: 0, w: 100, h: 100 }, png: Buffer.from("x"), ...extra });
+  const [jpeg, png] = sceneToSpec(scene([picture({ pictureExt: "jpg" }), picture()]), STYLE).shapes;
+  assert.equal(jpeg.ext, "jpg");
+  assert.equal(png.ext, "png");
+});
+
+test("a node's click effects reach every shape it becomes", () => {
+  const effects = [{ click: 1, dir: "in" }];
+  const shapes = sceneToSpec(scene([{ kind: "box", rect: { x: 10, y: 10, w: 100, h: 100 }, fill: C("FF0000"), sides: [{ side: "left", width: 4, color: C("00FF00") }], effects }]), STYLE).shapes;
+  assert.ok(shapes.length >= 2, `${shapes.length} shapes`);
+  for (const shape of shapes) assert.deepEqual(shape.effects, effects);
+});
+
+test("a node with no click effects adds none", () => {
+  const [shape] = sceneToSpec(scene([{ kind: "box", rect: { x: 10, y: 10, w: 100, h: 100 }, fill: C("FF0000") }]), STYLE).shapes;
+  assert.equal(shape.effects, undefined);
+});

@@ -387,7 +387,7 @@ export function shapesOf(node, u, style) {
     case "image":
       return node.data ? [imageShape(node, u, style)] : [];
     case "raster":
-      return node.png ? [{ kind: "image", ...u.box(node.rect), data: node.png, ext: "png", alt: node.alt || "" }] : [];
+      return node.png ? [{ kind: "image", ...u.box(node.rect), data: node.png, ext: node.pictureExt || "png", alt: node.alt || "" }] : [];
     case "video":
       return node.data ? [videoShape(node, u)] : [];
     case "missing":
@@ -429,6 +429,20 @@ function titleRectOf(node, canvasW) {
   return { ...r, w: Math.max(r.w, canvasW - 2 * r.x) };
 }
 
+// What became of a raster node: a picture, or nothing when its screenshot failed.
+export const pictureNotice = (where, n) => (n.png ? `Notice: ${where}: ${n.label} exported as a picture (${n.reason}).` : `Notice: ${where}: ${n.label} skipped (its picture could not be taken).`);
+
+// What to tell the user about a captured scene, exported as slide `no`.
+export function sceneNotices(scene, no) {
+  const lines = [];
+  if (scene.unsettled) lines.push(`Notice: slide ${no} was still changing when render.timeout ran out; exported as it stood then (raise render.timeout in pptx.config.mjs if it needs longer).`);
+  for (const node of scene.nodes) {
+    if (node.kind === "raster") lines.push(pictureNotice(`slide ${no}`, node));
+    if (node.kind === "missing") lines.push(`Notice: slide ${no}: image ${node.src} didn't load - skipped.`);
+  }
+  return lines;
+}
+
 export function sceneToSpec(scene, style) {
   const u = unitsFor(scene, style.geometry);
   const spec = { layout: "blank", placeholders: {}, shapes: [] };
@@ -445,7 +459,9 @@ export function sceneToSpec(scene, style) {
       if (spec.shapes.length > 0) spec.placeholders.titleZ = spec.shapes.length;
       continue;
     }
-    spec.shapes.push(...shapesOf(node, u, style));
+    const shapes = shapesOf(node, u, style);
+    if (node.effects?.length) for (const shape of shapes) shape.effects = node.effects;
+    spec.shapes.push(...shapes);
   }
   if (title) {
     // The placeholder would inherit its layout's alignment (Title Slide centres) and the master's

@@ -1,0 +1,9 @@
+{
+  "name": "animated-deck-fixture",
+  "private": true,
+  "description": "A small deck for the --animations tests. It has its own Slidev, so the package itself doesn't depend on one.",
+  "dependencies": {
+    "@slidev/cli": "53.0.0",
+    "vue": "^3.5.0"
+  }
+}

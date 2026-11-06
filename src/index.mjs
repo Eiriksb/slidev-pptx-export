@@ -35,9 +35,9 @@ function usableLogo(logo, configDir) {
  * @param {object} [options.config] - see default-config.mjs; typically loaded from a deck's pptx.config.mjs
  * @param {string} [options.configDir] - directory config-relative paths (logo.path) resolve against; defaults to inputPath's directory
  * @param {boolean} [options.embedFonts] - embed the fonts the slides use (TrueType, licence permitting; see README "Fonts")
- * @param {boolean|{screenshots?: boolean}} [options.render] - render the deck with its own Slidev in Chromium and convert what is drawn (see README "Render mode")
+ * @param {boolean|{screenshots?: boolean, animations?: boolean}} [options.render] - render the deck with its own Slidev in Chromium and convert what is drawn (see README "Render mode"). `animations`, here or as `config.render.animations`, implies render mode and plays the deck's clicks and transitions in the slide show (see README "Animations")
  * @returns {Promise<{ outputPath: string, slideCount: number, translatedCharts: number, unresolvedCharts: string[], screenshots?: (Buffer|null)[] }>}
- *   `screenshots` (render mode with `screenshots: true`): Slidev's own screenshot of each exported slide, null for a slide exported from markdown
+ *   `screenshots` (render mode with `screenshots: true`): Slidev's own screenshot of each exported slide, null for a slide exported from markdown, and all null with animations on
  */
 export async function convert(options) {
   const inputPath = resolve(options.inputPath);
@@ -46,6 +46,9 @@ export async function convert(options) {
   const configDir = options.configDir ? resolve(options.configDir) : inputDir;
 
   const config = mergeConfig(options.config || {});
+  // Animations imply render mode, whichever way they were asked for.
+  if (options.render?.animations) config.render = { ...config.render, animations: true };
+  const render = options.render || (config.render?.animations ? {} : false);
   config.inputDir = inputDir;
   config.publicDir = resolve(inputDir, "public");
   if (!existsSync(config.publicDir)) config.publicDir = null;
@@ -57,7 +60,7 @@ export async function convert(options) {
   }
 
   // Render mode draws whatever logo the page shows, so the config's logo isn't used there.
-  config.logo = options.render ? null : usableLogo(config.logo, configDir);
+  config.logo = render ? null : usableLogo(config.logo, configDir);
 
   const { globalFrontmatter, slides } = splitSlides(raw);
   const codeStore = [];
@@ -67,10 +70,10 @@ export async function convert(options) {
   let specs;
   let style;
   let rendered = null;
-  if (options.render) {
+  if (render) {
     // Loaded only here: the static export never touches the browser pipeline.
     const { renderSpecs } = await import("./render/index.mjs");
-    rendered = await renderSpecs({ inputPath, userConfig: options.config || {}, config, parsed, codeStore, screenshots: options.render.screenshots === true });
+    rendered = await renderSpecs({ inputPath, userConfig: options.config || {}, config, parsed, codeStore, screenshots: render.screenshots === true });
     ({ specs, style } = rendered);
   } else {
     specs = layoutDeck(parsed, codeStore, config);
@@ -102,7 +105,7 @@ export async function convert(options) {
     translatedCharts: rendered ? rendered.translatedCharts : chartBlocks.filter((b) => b.resolved).length,
     unresolvedCharts: rendered ? [] : [...new Set(chartBlocks.filter((b) => !b.resolved).map((b) => b.name))],
   };
-  if (rendered && options.render.screenshots === true) result.screenshots = rendered.screenshots;
+  if (rendered && render.screenshots === true) result.screenshots = rendered.screenshots;
   return result;
 }
 

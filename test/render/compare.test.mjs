@@ -1,7 +1,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { usableChromium } from "./helpers.mjs";
-import { similarity, inkOverlap } from "../../src/render/compare.mjs";
+import { changedShare, similarity, inkOverlap } from "../../src/render/compare.mjs";
 
 const chromium = await usableChromium();
 const browser = chromium ? await chromium.launch() : null;
@@ -64,3 +64,25 @@ test("ink overlap sees marks that moved, where the mean difference barely change
   const overlap = await inkOverlap(page, here, nudged);
   assert.ok(overlap > 0.25 && overlap < 0.45, `overlap ${overlap}`);
 }));
+
+// A route drawn across a busy map hardly moves the mean or the ink overlap, but its pixels change a lot.
+test("changed share: the share of pixels that changed clearly, which a thin line shows and re-encoding doesn't", opts, withPage(async (page) => {
+  const busy = '<div style="position:absolute;inset:0;background:repeating-linear-gradient(45deg,#7a9 0 6px,#cdb 6px 12px)"></div>';
+  const map = await shot(page, busy);
+  const route = await shot(page, busy + '<div style="position:absolute;left:20px;top:90px;width:280px;height:2px;background:#d00"></div>');
+  assert.equal(await changedShare(page, map, map), 0);
+  const share = await changedShare(page, map, route);
+  assert.ok(share > 0.005 && share < 0.03, `share ${share}`);
+  assert.ok((await similarity(page, map, route)) > 0.99, "the mean barely moves: why this score exists");
+  await page.setContent(`<body style="margin:0">${busy}</body>`);
+  const jpeg = await page.screenshot({ type: "jpeg", quality: 92 });
+  assert.ok((await changedShare(page, map, jpeg)) < 0.001);
+}));
+
+// What a fresh load of a map does to a recording's last frame: tiles a few dozen levels apart, here and there.
+test("changed share: a difference under 64 levels doesn't count, however wide", opts, withPage(async (page) => {
+  const flat = await shot(page, '<div style="position:absolute;inset:0;background:#8a9a8a"></div>');
+  const lighter = await shot(page, '<div style="position:absolute;inset:0;background:#8a9a8a"></div><div style="position:absolute;left:0;top:0;width:320px;height:40px;background:#bccbbc"></div>');
+  assert.equal(await changedShare(page, flat, lighter), 0);
+}));
+

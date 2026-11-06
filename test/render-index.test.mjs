@@ -354,3 +354,66 @@ test("a slide that kept changing until the timeout is reported", async () => {
   const { warnings } = await withWarnings(() => renderSpecs(args));
   assert.ok(warnings.some((w) => /slide 1 .*still changing/.test(w)), warnings.join("\n"));
 });
+
+const animatedDeps = (args, slides, canvas = { w: 980, h: 552 }) => ({
+  ...args.deps,
+  capture: async () => assert.fail("the default capture shouldn't run"),
+  gif: () => assert.fail("no animated pictures in this mode"),
+  captureStates: async ({ baseUrl }) => {
+    assert.equal(baseUrl, "http://127.0.0.1:1");
+    return { canvas, slides };
+  },
+});
+const reveal = { kind: "reveal" };
+const stateSlide = (index, sourceIndex, ...states) => ({ index, sourceIndex, filepath: null, notes: "n", transition: "fade", states, clicks: states.length > 1 ? [null, ...states.slice(1).map(() => reveal)] : [] });
+const shape = (hex) => ({ kind: "box", rect: { x: 10, y: 100, w: 100, h: 100 }, fill: C(hex) });
+
+test("with animations on: the states capture is used, nothing goes on the master, and videos stay native", async () => {
+  const { args } = setup("# One\n\n---\n\n# Two\n", { userConfig: { render: { animations: true } } });
+  // The same on both slides: the default export would put it on the master.
+  const slides = [stateSlide(1, 0, scene(1, 0, "One", [shape("FF0000")]), scene(1, 0, "One", [shape("FF0000"), shape("00FF00")])), stateSlide(2, 1, scene(2, 1, "Two", [shape("FF0000")]))];
+  const { result } = await withWarnings(() => renderSpecs({ ...args, deps: animatedDeps(args, slides) }));
+  assert.equal(result.specs.length, 2);
+  assert.ok(result.specs[0].animated);
+  assert.equal(result.specs[0].transition, "fade");
+  assert.deepEqual(result.masterShapes, []);
+  assert.deepEqual(result.specs[0].shapes.filter((s) => s.effects?.length).map((s) => s.effects), [[{ click: 1, dir: "in" }]]);
+  assert.deepEqual(result.screenshots, [null, null]);
+});
+
+test("with animations off: the states capture is never called", async () => {
+  const { args } = setup("# One\n", { slides: [scene(1, 0, "One")] });
+  const { result } = await withWarnings(() => renderSpecs({ ...args, deps: { ...args.deps, captureStates: async () => assert.fail("not this one") } }));
+  assert.equal(result.specs.length, 1);
+  assert.ok(!result.specs[0].animated);
+});
+
+test("with animations on: a slide that failed still falls back to its markdown", async () => {
+  const { args } = setup("# One\n\n---\n\n# Two\n", { userConfig: { render: { animations: true } } });
+  const slides = [stateSlide(1, 0, scene(1, 0, "One")), { index: 2, sourceIndex: 1, error: "Timeout 15000ms exceeded." }];
+  const { result, warnings } = await withWarnings(() => renderSpecs({ ...args, deps: animatedDeps(args, slides) }));
+  assert.equal(result.specs.length, 2);
+  assert.match(warnings.join("\n"), /slide 2 could not be rendered \(Timeout 15000ms exceeded\.\) - exported from markdown instead/);
+});
+
+test("with animations on: a deck that isn't 16:9 keeps its shape", async () => {
+  const { args, config } = setup("# One\n", { userConfig: { render: { animations: true } } });
+  const slides = [{ ...stateSlide(1, 0, { ...scene(1, 0, "One"), canvas: { w: 980, h: 735 } }) }];
+  await withWarnings(() => renderSpecs({ ...args, deps: animatedDeps(args, slides, { w: 980, h: 735 }) }));
+  assert.ok(Math.abs(config.slide.height / config.slide.width - 0.75) < 0.001);
+});
+
+test("with animations on, asking for animated pictures of videos gets a notice that they stay videos", async () => {
+  const { args } = setup("# One\n", { userConfig: { render: { animations: true, videos: "animated" } } });
+  const slides = [stateSlide(1, 0, scene(1, 0, "One"))];
+  const { warnings } = await withWarnings(() => renderSpecs({ ...args, deps: animatedDeps(args, slides) }));
+  assert.ok(warnings.includes("Notice: --videos animated (render.videos) doesn't apply with animations: videos stay videos, which PowerPoint for the web plays."), warnings.join("\n"));
+});
+
+test("with animations on, videos: native says nothing", async () => {
+  const { args } = setup("# One\n", { userConfig: { render: { animations: true, videos: "native" } } });
+  const slides = [stateSlide(1, 0, scene(1, 0, "One"))];
+  const { warnings } = await withWarnings(() => renderSpecs({ ...args, deps: animatedDeps(args, slides) }));
+  assert.ok(!warnings.some((w) => /render\.videos/.test(w)), warnings.join("\n"));
+});
+

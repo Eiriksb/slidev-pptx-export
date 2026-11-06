@@ -63,3 +63,37 @@ export async function similarity(page, a, b) {
 export async function inkOverlap(page, a, b) {
   return (await compareImages(page, a, b)).ink;
 }
+
+// The share of pixels whose gray level differs by more than `level` (of 255), on 320x180 thumbnails:
+// what the two scores above can't see on a busy picture, such as a route drawn across a map or a card
+// that appeared. Re-encoding a picture (PNG to JPEG), or map tiles loaded again, changes almost nothing
+// by this measure: those differ by a few dozen levels at most.
+export async function changedShare(page, a, b, { level = 64 } = {}) {
+  return page.evaluate(
+    async ({ a: pngA, b: pngB, level: cut }) => {
+      const gray = async (b64) => {
+        const img = new Image();
+        img.src = `data:image/png;base64,${b64}`;
+        await img.decode();
+        const c = document.createElement("canvas");
+        c.width = 320;
+        c.height = 180;
+        const x = c.getContext("2d");
+        x.fillStyle = "#ffffff";
+        x.fillRect(0, 0, 320, 180);
+        x.drawImage(img, 0, 0, 320, 180);
+        const d = x.getImageData(0, 0, 320, 180).data;
+        const out = new Float64Array(320 * 180);
+        for (let i = 0; i < out.length; i++) out[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+        return out;
+      };
+      const ga = await gray(pngA);
+      const gb = await gray(pngB);
+      let changed = 0;
+      for (let i = 0; i < ga.length; i++) if (Math.abs(ga[i] - gb[i]) > cut) changed++;
+      return changed / ga.length;
+    },
+    { a: a.toString("base64"), b: b.toString("base64"), level },
+  );
+}
+

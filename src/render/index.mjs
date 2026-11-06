@@ -7,8 +7,10 @@ import { createHash } from "node:crypto";
 import { startDeckServer } from "./server.mjs";
 import { loadChromium } from "./browser.mjs";
 import { captureDeck } from "./capture.mjs";
+import { captureClickStates } from "./click-states.mjs";
+import { slideSpecs } from "./animated.mjs";
 import { animateVideos as animateSlideVideos, hasFfmpeg, videosToAnimate } from "./animate.mjs";
-import { sceneToSpec, shapesOf, unitsFor } from "./scene.mjs";
+import { pictureNotice, sceneNotices, sceneToSpec, shapesOf, unitsFor } from "./scene.mjs";
 import { deckStyle, layoutOne, groupedBarChart } from "../layout.mjs";
 
 // Config keys that only restate what the page shows; render mode reads the page instead.
@@ -30,9 +32,6 @@ function resolveChart(node, config, S) {
     console.warn(`Warning: chart resolver ${name} failed (${err.message}) - using the chart drawn on the page.`);
   }
 }
-
-// What became of a raster node: a picture, or nothing when its screenshot failed.
-const pictureNotice = (where, n) => (n.png ? `Notice: ${where}: ${n.label} exported as a picture (${n.reason}).` : `Notice: ${where}: ${n.label} skipped (its picture could not be taken).`);
 
 const sha1 = (b) => createHash("sha1").update(b).digest("hex");
 
@@ -144,8 +143,28 @@ function markdownFallback(scene, no, { inputPath, parsed, codeStore, config }) {
   return layoutOne(slide, no - 1, codeStore, config);
 }
 
+const chartsIn = (specs) => specs.reduce((n, s) => n + (s.shapes || []).filter((x) => x.kind === "chart").length, 0);
+
+// An animated export: nothing goes on the master, since a shape there can't take part in a slide's
+// clicks, and videos stay videos, since animated pictures don't play on PowerPoint for the web.
+function animatedResult(captured, { inputPath, parsed, codeStore, config, style, sceneStyle }) {
+  if (config.render?.videos === "animated") console.warn("Notice: --videos animated (render.videos) doesn't apply with animations: videos stay videos, which PowerPoint for the web plays.");
+  const specs = [];
+  for (const slide of captured.slides) {
+    if (slide.error) {
+      specs.push(...markdownFallback(slide, specs.length + 1, { inputPath, parsed, codeStore, config }));
+      continue;
+    }
+    for (const state of slide.states) {
+      for (const node of state.nodes) if (node.kind === "chart" || node.kind === "raster") resolveChart(node, config, style);
+    }
+    specs.push(...slideSpecs(slide, sceneStyle));
+  }
+  return { specs, style, screenshots: specs.map(() => null), translatedCharts: chartsIn(specs), masterShapes: [] };
+}
+
 export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, codeStore, screenshots = false, deps = {} }) {
-  const { start = startDeckServer, chromiumFor = loadChromium, capture = captureDeck } = deps;
+  const { start = startDeckServer, chromiumFor = loadChromium, capture = captureDeck, captureStates = captureClickStates } = deps;
   const unused = UNUSED_KEYS.filter((k) => userConfig[k] != null);
   if (unused.length) console.warn(`Notice: render mode ignores ${unused.join(", ")} from pptx.config.mjs - the rendered page already shows them.`);
 
@@ -161,7 +180,8 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
   try {
     const server = await start({ inputPath });
     try {
-      captured = await capture({ baseUrl: server.url, browser, timeout: config.render?.timeout ?? 15000, screenshots, slidevVersion: server.version });
+      const options = { baseUrl: server.url, browser, timeout: config.render?.timeout ?? 15000, slidevVersion: server.version };
+      captured = config.render?.animations ? await captureStates(options) : await capture({ ...options, screenshots });
     } catch (err) {
       // A deck that fails to build or boot shows up here; Slidev's own output says why.
       const output = server.log();
@@ -181,6 +201,7 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
   }
   const style = deckStyle(config);
   const sceneStyle = { geometry: style.geometry, theme: style.theme, fonts: config.fonts };
+  if (config.render?.animations) return animatedResult(captured, { inputPath, parsed, codeStore, config, style, sceneStyle });
 
   const rendered = captured.slides.filter((s) => !s.error);
   animateVideos(rendered, config.render?.videos ?? "animated", { gif: deps.gif, rate: deps.rate });
@@ -213,14 +234,9 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
       shots.push(...fallback.map(() => null));
       continue;
     }
-    if (scene.unsettled) console.warn(`Notice: slide ${no} was still changing when render.timeout ran out; exported as it stood then (raise render.timeout in pptx.config.mjs if it needs longer).`);
-    for (const node of scene.nodes) {
-      if (node.kind === "raster") console.warn(pictureNotice(`slide ${no}`, node));
-      if (node.kind === "missing") console.warn(`Notice: slide ${no}: image ${node.src} didn't load - skipped.`);
-    }
+    for (const line of sceneNotices(scene, no)) console.warn(line);
     specs.push(sceneToSpec(scene, sceneStyle));
     shots.push(scene.screenshot || null);
   }
-  const translatedCharts = specs.reduce((n, s) => n + (s.shapes || []).filter((x) => x.kind === "chart").length, 0);
-  return { specs, style, screenshots: shots, translatedCharts, masterShapes };
+  return { specs, style, screenshots: shots, translatedCharts: chartsIn(specs), masterShapes };
 }

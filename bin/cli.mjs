@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Usage: slidev-pptx-export [input.md] [output.pptx] [--config path/to/pptx.config.mjs] [--render] [--embed-fonts]
-//                           [--videos animated|native]
+//                           [--videos animated|native] [--animations]
 //
 // Without --config, looks for pptx.config.mjs next to input.md, falling back to the built-in
 // generic defaults (plain colors/fonts, no logo, no chart resolvers) if none is found.
@@ -11,7 +11,10 @@
 //
 // --videos (render mode): videos LibreOffice Impress can't show (slide content over them, a slide's
 // second video) become looping animated pictures (animated, the default; needs ffmpeg) or stay
-// videos (native: for PowerPoint only), see README.
+// videos (native: for PowerPoint only), see README. With --animations, videos always stay videos.
+//
+// --animations implies --render, and plays the deck's clicks and slide transitions in the slide show on
+// PowerPoint for the web. A click whose page moves by script needs ffmpeg or GStreamer, see README.
 
 import { existsSync } from "node:fs";
 import { resolve, dirname, basename, extname, isAbsolute } from "node:path";
@@ -24,6 +27,7 @@ function parseArgs(argv) {
   let render = false;
   let embedFonts = false;
   let videos = null;
+  let animations = false;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--config") {
       configPath = argv[++i];
@@ -31,6 +35,8 @@ function parseArgs(argv) {
       configPath = argv[i].slice("--config=".length);
     } else if (argv[i] === "--render") {
       render = true;
+    } else if (argv[i] === "--animations") {
+      animations = true;
     } else if (argv[i] === "--embed-fonts") {
       embedFonts = true;
     } else if (argv[i] === "--videos" || argv[i].startsWith("--videos=")) {
@@ -40,7 +46,7 @@ function parseArgs(argv) {
       positional.push(argv[i]);
     }
   }
-  return { positional, configPath, render, embedFonts, videos };
+  return { positional, configPath, render, embedFonts, videos, animations };
 }
 
 async function loadConfig(configPath, inputPath) {
@@ -55,7 +61,7 @@ async function loadConfig(configPath, inputPath) {
 }
 
 async function main() {
-  const { positional, configPath, render, embedFonts, videos } = parseArgs(process.argv.slice(2));
+  const { positional, configPath, render, embedFonts, videos, animations } = parseArgs(process.argv.slice(2));
   const inputArg = positional[0] || "slides.md";
   const inputPath = resolve(process.cwd(), inputArg);
   if (!existsSync(inputPath)) {
@@ -65,6 +71,7 @@ async function main() {
 
   const { config, configDir } = await loadConfig(configPath, inputPath);
   if (videos) config.render = { ...config.render, videos };
+  if (animations) config.render = { ...config.render, animations: true };
   const outputArg = positional[1] || `${basename(inputPath, extname(inputPath))}-editable.pptx`;
   const outputPath = resolve(process.cwd(), outputArg);
 

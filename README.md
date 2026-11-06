@@ -59,10 +59,14 @@ await convert({
 
 // Render mode (see below): runs the deck's own Slidev in headless Chromium.
 await convert({ inputPath: "slides.md", outputPath: "slides-editable.pptx", render: true });
+
+// Clicks and transitions for presenting (see Animations below).
+await convert({ inputPath: "slides.md", outputPath: "slides-show.pptx", render: { animations: true } });
 ```
 
 `render: { screenshots: true }` also returns Slidev's own screenshot of each exported slide as
-`result.screenshots` (`null` for a slide exported from markdown), which the visual check uses.
+`result.screenshots` (`null` for a slide exported from markdown), which the visual check uses. With
+animations on they are all `null`: a slide there shows several states, so no one screenshot matches it.
 
 ## Render mode (`--render`)
 
@@ -153,13 +157,72 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
   map that flies into place or a route drawn by `requestAnimationFrame` is exported finished. One still
   changing after `render: { timeout }` is exported as it stands, with a notice.
 - Limits: each slide is captured in its final `v-click` state, with every fragment shown.
-  Animations and transitions (videos excepted, see above), hyperlinks (link text keeps its styling) and Slidev
+  Animations and transitions (videos excepted, see above; `--animations` below carries them over), hyperlinks (link text keeps its styling) and Slidev
   drawings aren't carried over; fonts only with `--embed-fonts` (see Fonts).
 
 Render mode needs the deck's dependencies installed (`npm install` in the deck folder), Node
 20.12 or newer (what Slidev 52 requires) and Playwright's Chromium. It looks for
 `playwright-chromium`, then `playwright`, each first in the deck folder and then next to this
 package. It takes roughly 10–30 seconds per deck.
+
+## Animations (`--animations`)
+
+```bash
+npx slidev-pptx-export slides.md slides-show.pptx --animations
+```
+
+`--animations` (or `render: { animations: true }` in `pptx.config.mjs`, or `render: { animations: true }`
+in `convert`) is render mode that also carries the deck's clicks and slide transitions over, so the
+`.pptx` steps through them in the slide show in the same order as Slidev. It is made for presenting
+from **PowerPoint for the web** with a **keyboard or clicker**. Keep the default export as the copy you
+edit: this one is for presenting.
+
+What becomes what:
+
+- A click that only shows, hides or changes content (`v-click`, a `$clicks`-driven component, a table
+  that gains a column) is a native Fade on the same slide. Text and tables stay native.
+- A click after which the page moves by script for a while (a map flying, a route being drawn, anything
+  run by `requestAnimationFrame` or `setInterval`) and a picture on the slide changes (a map, a canvas,
+  an SVG drawing) is recorded frame by frame and becomes a slide of its own holding a
+  video of the whole slide, which starts by itself and holds its last frame. Script motion that changes
+  only text or boxes (a number counting up) is a Fade to its end state. Everything on that slide,
+  text and tables included, is part of the video: on PowerPoint for the web, native shapes above a
+  video vanish on later video slides of a show, so there is nothing above it. The next click opens a
+  native slide again, fading in.
+- A click that changes the slide's background also opens a new slide, fading in: PowerPoint can't
+  change a background on a click.
+- The deck's `transition` (a name, or `{ name }`) becomes PowerPoint's Fade for `fade` and `fade-out`,
+  and Push for `slide-left`, `-right`, `-up` and `-down`. Others (`view-transition`, custom ones) get
+  none, with a notice.
+- A deck therefore has more PowerPoint slides than Slidev slides: one more per click that moves.
+  Speaker notes are on all of them.
+- Nothing goes on the slide master, and the deck's own videos stay videos (`--videos` doesn't apply).
+
+Use a keyboard or clicker. A mouse click on a video slide restarts the video instead of moving on.
+Going back with the left arrow works, but each video slide takes one extra press. Large pictures are
+JPEGs in this mode, so slides appear faster after a change.
+
+Recording a click needs **ffmpeg** with `libx264`, or **GStreamer** with `x264enc` and `mp4mux` (on
+Debian and Ubuntu: `gstreamer1.0-plugins-ugly` and `gstreamer1.0-plugins-good`). Without one, such a
+click is a Fade to its end state, with a notice naming what to install. Each recorded click prints its
+length and size; the test deck's took 2 to 15 seconds and 0.6 to 3.6 MB each. An export takes a few
+minutes, mostly recording. A recording waits for its page as long as `render: { timeout }` (at least
+30 s), and a click whose page is still moving after 40 s is a Fade, with a notice.
+
+What can't carry over: hover highlights, live sliders and other controls, scrolling inside a table, and
+motion that runs when a slide opens without a click (the slide shows its settled state).
+
+Checked on PowerPoint for the web in Chromium on Linux, by running a whole deck from the first slide.
+Not checked: desktop PowerPoint, Keynote, Google Slides and Presenter View. LibreOffice Impress opens
+the file. Known quirks on the web:
+
+- A slide's video that you change in PowerPoint's editor (its Start setting, for instance) may stop
+  starting by itself, even after you change it back.
+- Pressing Escape while a video plays can leave its frame over the editor until the page is reloaded.
+- A notice saying a clip's last frame differs from a fresh load of the slide means the page ends a
+  click differently from how it loads at that click. The video shows what the page did; the next slide
+  shows the fresh load. Usually that is the deck's own doing (a layout that isn't updated while
+  something moves), worth fixing in the deck.
 
 ## Fonts (`--embed-fonts`)
 
@@ -250,11 +313,15 @@ npm test                    # unit tests, package lint, kitchen-sink fixture exp
 npm run render              # LibreOffice render of the fixture (and ../innotek-SlideDevBase if present) to out/render/
 npm run test:render         # browser tests (needs playwright-chromium; skips otherwise)
 npm run render -- --render  # render-mode export + visual check against Slidev's own screenshots
+npm --prefix test/fixtures/animated-deck ci   # once: the Slidev the --animations tests run
 ```
 
 The browser tests (`test/render/`) use `playwright-chromium` and `chart.js`, both
 devDependencies; `chart.js` is only there to draw test charts. `npm test` needs no
 browser. The render checks skip when LibreOffice, poppler or Chromium isn't available.
+The `--animations` tests export a small deck with its own Slidev (`test/fixtures/animated-deck`), and
+skip until it is installed; a clip's colours are checked in Google Chrome, which can decode H.264, and
+that test skips without it.
 
 ## What it doesn't do
 

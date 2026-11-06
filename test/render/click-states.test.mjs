@@ -57,8 +57,8 @@ async function serve(t, slides) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 
-const captureStates = async (t, slides, over = {}) =>
-  captureClickStates({ baseUrl: await serve(t, slides), browser, timeout: 15000, record: async () => assert.fail("nothing should be recorded"), encoder: FAKE_ENCODER, encode: fakeEncode, notice: () => {}, ...over });
+const captureStates = async (t, slides, { timeout = 15000, ...over } = {}) =>
+  captureClickStates({ baseUrl: await serve(t, slides), browser, timeout, record: async () => assert.fail("nothing should be recorded"), encoder: FAKE_ENCODER, encode: fakeEncode, notice: () => {}, ...over });
 
 const para = (text) => `<p style="margin:0 0 8px;font:20px Arial">${text}</p>`;
 const canvas = (style, color) => `<canvas width="100" height="100" style="position:absolute;${style}" data-fill="${color}"></canvas><script>document.currentScript.previousElementSibling.getContext("2d").fillStyle="${color}";document.currentScript.previousElementSibling.getContext("2d").fillRect(0,0,100,100);</script>`;
@@ -170,6 +170,17 @@ test("a recording starts from the state before the click, on the slide's own pag
   assert.equal(calls[0].sel, ".slidev-page-1");
   assert.deepEqual(calls[0].canvas, { w: 980, h: 552 });
   assert.equal(calls[0].browser, browser);
+});
+
+test("a recording waits as long as render.timeout allows, and never less than 30 s", opts, async (t) => {
+  const waits = [];
+  const record = (dir) => async (o) => {
+    waits.push(o.timeout);
+    return recording(dir)();
+  };
+  await captureStates(t, TO_WHITE, { timeout: 45000, record: record(fakeFrames()) });
+  await captureStates(t, TO_WHITE, { timeout: 15000, record: record(fakeFrames()) });
+  assert.deepEqual(waits, [45000, 30000]);
 });
 
 test("a motion click keeps its clip, with its first frame as the poster, and its frames are removed", opts, async (t) => {

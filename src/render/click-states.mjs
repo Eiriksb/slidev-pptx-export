@@ -13,6 +13,8 @@ import { clipFrame, recordClick } from "./record.mjs";
 // shows. Measured on a real deck's twelve clips: those that end right change 0.005 to 0.009%; the state
 // before each click, against the fresh load after it, 0.12 to 7%.
 const DIFFERENT_ENDING = 0.0005;
+// A recording page loads the slide's state before the click and waits for it to settle, which can take
+// longer than a still capture: at least this long, or render.timeout when that is longer.
 const RECORD_TIMEOUT_MS = 30000;
 
 const firstLine = (err) => String(err?.message || err).split("\n")[0];
@@ -35,12 +37,12 @@ async function statesOf(page, baseUrl, s, canvas, timeout) {
 
 // A click that changed a picture: records it to see whether the page moves by script, and if it does,
 // makes the clip. Anything that goes wrong costs the clip, not the export: the click is then a Fade.
-async function recordedClick({ page, baseUrl, s, k, canvas, state, record, encoder, encode, notice }) {
+async function recordedClick({ page, baseUrl, s, k, canvas, state, timeout, record, encoder, encode, notice }) {
   const where = `slide ${s.no} click ${k}`;
   const reveal = { kind: "reveal" };
   let rec;
   try {
-    rec = await record({ browser: page.context().browser(), url: `${baseUrl}/${s.no}?clicks=${k - 1}`, sel: `.slidev-page-${s.no}`, canvas, timeout: RECORD_TIMEOUT_MS });
+    rec = await record({ browser: page.context().browser(), url: `${baseUrl}/${s.no}?clicks=${k - 1}`, sel: `.slidev-page-${s.no}`, canvas, timeout: Math.max(timeout, RECORD_TIMEOUT_MS) });
   } catch (err) {
     notice(`Notice: ${where}: couldn't record it (${firstLine(err)}) - exported as a Fade.`);
     return reveal;
@@ -84,7 +86,7 @@ async function captureOne({ page, baseUrl, s, canvas, timeout, record, encoder, 
   const clicks = states.length > 1 ? [null] : [];
   for (let k = 1; k < states.length; k++) {
     const changed = pictureChanged(states[k - 1].nodes, states[k].nodes);
-    clicks.push(changed ? await recordedClick({ page, baseUrl, s, k, canvas, state: states[k], record, encoder, encode, notice }) : { kind: "reveal" });
+    clicks.push(changed ? await recordedClick({ page, baseUrl, s, k, canvas, state: states[k], timeout, record, encoder, encode, notice }) : { kind: "reveal" });
   }
   for (const state of states) delete state.screenshot;
   return { ...slide, states, clicks };

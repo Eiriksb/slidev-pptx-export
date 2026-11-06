@@ -103,6 +103,7 @@ test("the slide before a clip is native, and what the export did is on stderr", 
   const { z, notices } = await exportFixture();
   assert.match(slideTexts(z)[2], /Script motion/);
   assert.match(notices, /^Notice: slide 3 click 1: clip, [\d.]+ s, [\d.]+ MB\.$/m);
+  assert.doesNotMatch(notices, /last frame differs/, "a clip that ends as the page loads gets no notice");
 });
 
 test("animations in the config imply render mode too", opts, async () => {

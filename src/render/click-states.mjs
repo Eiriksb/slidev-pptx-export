@@ -5,12 +5,14 @@ import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { clickKind, pictureChanged } from "./animation-plan.mjs";
 import { captureSlide, openDeck } from "./capture.mjs";
-import { compareImages } from "./compare.mjs";
+import { changedShare } from "./compare.mjs";
 import { ENCODER_HINT, encodeClip, findEncoder } from "./encode.mjs";
 import { clipFrame, recordClick } from "./record.mjs";
 
-// Below this, a clip's last frame isn't what a fresh load of that state shows.
-const SAME_PICTURE = 0.95;
+// Above this share of clearly changed pixels, a clip's last frame isn't what a fresh load of that state
+// shows. Measured on a real deck's twelve clips: those that end right change 0.005 to 0.009%; the state
+// before each click, against the fresh load after it, 0.12 to 7%.
+const DIFFERENT_ENDING = 0.0005;
 const RECORD_TIMEOUT_MS = 30000;
 
 const firstLine = (err) => String(err?.message || err).split("\n")[0];
@@ -50,8 +52,8 @@ async function recordedClick({ page, baseUrl, s, k, canvas, state, record, encod
       return reveal;
     }
     const data = encode(encoder, rec);
-    const { similarity } = await compareImages(page, readFileSync(frameFile(rec.dir, rec.count - 1)), state.screenshot);
-    if (similarity < SAME_PICTURE) notice(`Notice: ${where}: the clip's last frame differs from a fresh load of the slide (the page's live state differs from a fresh load, or a recording is wrong).`);
+    const changed = await changedShare(page, readFileSync(frameFile(rec.dir, rec.count - 1)), state.screenshot);
+    if (changed > DIFFERENT_ENDING) notice(`Notice: ${where}: the clip's last frame differs from a fresh load of the slide (the page's live state differs from a fresh load, or a recording is wrong).`);
     const duration = rec.count / rec.fps;
     notice(`Notice: ${where}: clip, ${duration.toFixed(1)} s, ${(data.length / 2 ** 20).toFixed(1)} MB.`);
     const { width, height } = clipFrame(canvas);

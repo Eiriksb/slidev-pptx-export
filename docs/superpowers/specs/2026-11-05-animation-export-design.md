@@ -192,7 +192,7 @@ Record state `k-1` to `k` as H.264 MP4 and make it the only shape on its own Pow
   against the other as a condition for keeping the clip.
 - **Guard.** Drop the clip, making the click a Fade reveal with a `Notice:` saying why, only if the page never
   settles, no encoder is available, or the recording shows no visible change. If the clip's last frame differs from
-  a screenshot of the direct load beyond a threshold, keep the clip and print a `Notice:` naming the slide and click,
+  a screenshot of the direct load beyond a threshold (more than 0.05% of pixels changed by over 64 grey levels, on 320x180 thumbnails, calibrated on twelve real clips), keep the clip and print a `Notice:` naming the slide and click,
   so a wrong recording is visible without costing a good one.
 - **Known quirk.** The test deck's slide 4 leaves its map a stale size after the flight, because its
   `ResizeObserver` skips while the map is moving: a blank band beside the map, and the map off-centre. Slidev does the

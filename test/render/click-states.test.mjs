@@ -76,6 +76,8 @@ const BIG_AND_SMALL_PICTURE = [{ inner: () => canvas(FULL, "#3366aa") + canvas("
 const pictureChanges = (to) => [{ clicksTotal: 1, inner: (k) => canvas(FULL, k === 0 || k === null ? "#808080" : to) }];
 const TO_WHITE = pictureChanges("#ffffff");
 const TO_BLUE = pictureChanges("#0000ff");
+// The fresh load at click 1 has a thin dark line across a white picture: a clip ending without it ended early.
+const LINE_AT_THE_END = [{ clicksTotal: 1, inner: (k) => canvas(FULL, k === 1 ? "#ffffff" : "#808080") + (k === 1 ? '<div style="position:absolute;left:100px;top:300px;width:600px;height:6px;background:#202020"></div>' : "") }];
 const CLICK_STATE_FAILS = [{ clicksTotal: 1, inner: (k) => (k === 1 ? "<div>An error occurred on this slide. Check the terminal.</div>" : para("Fine")) }];
 const ALWAYS_FAILS = [{ clicksTotal: 1, inner: () => "<div>An error occurred on this slide. Check the terminal.</div>" }];
 
@@ -230,6 +232,13 @@ test("a recording or an encode that fails is a reveal with a notice, and the exp
 test("a clip's last frame unlike the direct load is kept, with a notice", opts, async (t) => {
   const lines = [];
   const { slides } = await captureStates(t, TO_BLUE, { record: recording(fakeFrames()), notice: (l) => lines.push(l) });
+  assert.equal(slides[0].clicks[1].kind, "motion");
+  assert.match(lines.join("\n"), /^Notice: slide 1 click 1: the clip's last frame differs/m);
+});
+
+test("a clip that ends without a thin line the fresh load has is kept, with a notice", opts, async (t) => {
+  const lines = [];
+  const { slides } = await captureStates(t, LINE_AT_THE_END, { record: recording(fakeFrames()), notice: (l) => lines.push(l) });
   assert.equal(slides[0].clicks[1].kind, "motion");
   assert.match(lines.join("\n"), /^Notice: slide 1 click 1: the clip's last frame differs/m);
 });

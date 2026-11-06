@@ -179,12 +179,13 @@ SLIDEV_PPTX_BROWSER=/usr/bin/chromium SLIDEV_PPTX_FFMPEG=/opt/ffmpeg/bin/ffmpeg 
   npx slidev-pptx-export slides.md slides-editable.pptx --render
 ```
 
-- `render.browser` / `SLIDEV_PPTX_BROWSER` is driven through `playwright-core`, so `playwright-chromium`
-  and Playwright's own download aren't needed. `playwright-chromium` and `playwright` are still tried
-  first when no browser is named.
+- `render.browser` / `SLIDEV_PPTX_BROWSER` names the executable. `playwright-core` is enough to drive it, so
+  Playwright's own download isn't needed; if `playwright-chromium` or `playwright` is installed, that is
+  used first.
 - `render.ffmpeg` / `SLIDEV_PPTX_FFMPEG` is the ffmpeg used for recorded clips (`--animations`) and for
-  the animated pictures of a deck's own videos. If the named one is missing or lacks `libx264`, the
-  export uses `ffmpeg` on the PATH, then GStreamer.
+  the animated pictures of a deck's own videos. For clips, a named ffmpeg that is missing or lacks
+  `libx264` gives way to `ffmpeg` on the PATH, then GStreamer. For the animated pictures only the named
+  ffmpeg is used (`ffmpeg` on the PATH when none is named); if it isn't there, those videos stay videos, with a notice.
 - A key in the config wins over its environment variable.
 
 ### Progress (`--progress json`)

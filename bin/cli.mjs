@@ -26,6 +26,7 @@ import { resolve, dirname, basename, extname, isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
 import { format } from "node:util";
 import { convert } from "../src/index.mjs";
+import { runStop } from "../src/stop.mjs";
 
 function parseArgs(argv) {
   const positional = [];
@@ -108,7 +109,23 @@ async function main(argv, emit) {
 
 const argv = process.argv.slice(2);
 const emit = wantsJson(argv) ? jsonProgress() : null;
+
+// SIGTERM or SIGINT stops the export: the Slidev child, the browser and any .partial file are cleaned
+// up, then the process exits 143 / 130 (with a final "stopped" error event in json mode).
+let stopping = false;
+for (const [signal, code] of [["SIGTERM", 143], ["SIGINT", 130]]) {
+  process.on(signal, async () => {
+    if (stopping) return;
+    stopping = true;
+    await runStop();
+    console.error("Stopped.");
+    if (emit) emit({ event: "error", message: "stopped" }, () => process.exit(code));
+    else process.exit(code);
+  });
+}
+
 main(argv, emit).catch((err) => {
+  if (stopping) return; // the stop is already ending the process
   // A missing input file is a message, not a stack trace.
   console.error(err.message.startsWith("Input file not found") ? err.message : err);
   // Exit once the error line is flushed: stdout may be a pipe that is written asynchronously.

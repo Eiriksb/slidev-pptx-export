@@ -4,6 +4,7 @@
 
 import { dirname, resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { onStop } from "../stop.mjs";
 import { startDeckServer } from "./server.mjs";
 import { loadChromium } from "./browser.mjs";
 import { captureDeck } from "./capture.mjs";
@@ -178,10 +179,12 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
   const chromium = await chromiumFor(dirname(inputPath), browserOptions);
   let browser;
   try {
-    browser = await chromium.launch(browserOptions);
+    // The CLI stops the export on SIGINT/SIGTERM itself (bin/cli.mjs); Playwright's own handlers would exit first.
+    browser = await chromium.launch({ ...browserOptions, handleSIGINT: false, handleSIGTERM: false });
   } catch (err) {
     throw new Error(`render mode could not launch Playwright's Chromium (${String(err.message || err).split("\n")[0]}) - run \`npx playwright install chromium\`.`, { cause: err });
   }
+  const forgetBrowser = onStop(() => browser.close());
   let captured;
   try {
     const server = await start({ inputPath });
@@ -197,6 +200,7 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
       await server.stop();
     }
   } finally {
+    forgetBrowser();
     await browser.close();
   }
 

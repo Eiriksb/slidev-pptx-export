@@ -4,6 +4,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { onStop } from "../stop.mjs";
 import { join, dirname, basename, resolve as resolvePath } from "node:path";
 
 // @slidev/cli as the deck sees it: in its own node_modules or any parent's (workspaces hoist it).
@@ -58,8 +59,10 @@ export async function startDeckServer({ inputPath, timeout = 60000 }) {
     exited = code ?? signal ?? "unknown";
   });
   const log = () => lines.filter((l) => l.trim()).join("\n");
+  const forget = onStop(() => stop());
   const stop = () =>
     new Promise((resolve) => {
+      forget();
       if (exited !== null) return resolve();
       child.once("close", () => resolve());
       child.kill();

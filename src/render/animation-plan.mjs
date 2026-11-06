@@ -86,7 +86,9 @@ export function clickKind({ changed, record, encoder }) {
 }
 
 // The slide's PowerPoint slides, in order: { kind: "still", first, last, runs } showing states first to
-// last natively, or { kind: "clip", click }. `kinds[k]` is click k's kind; kinds[0] is unused.
+// last natively, or { kind: "clip", click }. `kinds[k]` is click k's kind: "reveal", "motion", or "cut"
+// for a reveal that must open a new still slide (one that changes what a slide can't change on a click,
+// such as its background). kinds[0] is unused.
 export function planSlide(states, kinds) {
   const segments = [];
   let still = { kind: "still", first: 0, last: 0 };
@@ -95,7 +97,7 @@ export function planSlide(states, kinds) {
     if (kinds[k] === "motion") {
       segments.push({ kind: "clip", click: k });
       still = null;
-    } else if (still) {
+    } else if (still && kinds[k] !== "cut") {
       still.last = k;
     } else {
       still = { kind: "still", first: k, last: k };

@@ -42,6 +42,30 @@ test("transitions: the forward half maps; anything else is null", () => {
   assert.equal(slidevTransition(null), null);
 });
 
+test("a transition written as an object maps by its name", () => {
+  assert.equal(slidevTransition({ name: "fade", mode: "out-in" }), "fade");
+  assert.deepEqual(slidevTransition({ name: "slide-left | fade" }), { push: "l" });
+  assert.equal(slidevTransition({ mode: "out-in" }), null);
+});
+
+test("an unknown transition written as an object is named in its notice", () => {
+  const lines = [];
+  slideSpecs(slideOf([[box("FF0000")]], [], { transition: { name: "zoom" } }), STYLE, { notice: (l) => lines.push(l) });
+  assert.match(lines[0], /^Notice: slide 3: transition "zoom" has no form/);
+});
+
+test("a click that changes the slide's background opens a new slide in that state, with a fade", () => {
+  const slide = slideOf([[box("FF0000")], [box("FF0000"), box("00FF00")], [box("FF0000"), box("00FF00"), box("0000FF")]], [null, REVEAL, REVEAL]);
+  slide.states[1].background = { color: C("102030") };
+  slide.states[2].background = { color: C("102030") };
+  const specs = slideSpecs(slide, STYLE, { notice: fail });
+  assert.equal(specs.length, 2);
+  assert.equal(specs[0].background, undefined);
+  assert.deepEqual(specs[1].background, { color: "#102030" });
+  assert.equal(specs[1].transition, "fade");
+  assert.deepEqual(specs[1].shapes.filter((s) => s.effects?.length).map((s) => s.effects), [[{ click: 1, dir: "in" }]]);
+});
+
 test("a slide with no clicks is one spec with no effects", () => {
   const specs = slideSpecs(slideOf([[title("T"), box("FF0000")]]), STYLE, { notice: fail });
   assert.equal(specs.length, 1);

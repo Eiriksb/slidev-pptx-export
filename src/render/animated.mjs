@@ -1,15 +1,18 @@
 // A captured slide's click states as SlideSpecs for an animated export (see animation-plan.mjs for what
 // becomes what).
 
-import { effectsOf, planSlide } from "./animation-plan.mjs";
+import { effectsOf, planSlide, stateSignature } from "./animation-plan.mjs";
 import { sceneNotices, sceneToSpec } from "./scene.mjs";
 
 const PUSH = { "slide-left": "l", "slide-right": "r", "slide-up": "u", "slide-down": "d" };
 
+// A Slidev transition's name: the string, or the name of the object form ({ name, mode }).
+const transitionName = (value) => (value && typeof value === "object" ? value.name : value);
+
 // The PowerPoint transition for a Slidev one: its forward half, as in "slide-left | fade". Null for
 // anything PowerPoint has no form of.
 export function slidevTransition(value) {
-  const forward = String(value ?? "").split("|")[0].trim();
+  const forward = String(transitionName(value) ?? "").split("|")[0].trim();
   if (forward === "fade" || forward === "fade-out") return "fade";
   return PUSH[forward] ? { push: PUSH[forward] } : null;
 }
@@ -53,9 +56,14 @@ export function slideSpecs(slide, sceneStyle, { notice = console.warn } = {}) {
   const said = new Set(slide.states.flatMap((state) => sceneNotices(state, slide.index)));
   for (const line of said) notice(line);
   const transition = slidevTransition(slide.transition);
-  if (slide.transition && !transition && slide.transition !== "none") notice(`Notice: slide ${slide.index}: transition "${slide.transition}" has no form in PowerPoint - left out.`);
+  const name = transitionName(slide.transition);
+  if (name && !transition && name !== "none") notice(`Notice: slide ${slide.index}: transition "${name}" has no form in PowerPoint - left out.`);
 
-  const kinds = slide.clicks.length ? slide.clicks.map((c) => c?.kind ?? null) : [null];
+  // A slide's background can't change on a click, so a reveal that changes it opens a new slide.
+  const background = (state) => stateSignature({ kind: "background", ...state.background });
+  const kinds = slide.clicks.length
+    ? slide.clicks.map((c, k) => (c?.kind === "reveal" && background(slide.states[k]) !== background(slide.states[k - 1]) ? "cut" : (c?.kind ?? null)))
+    : [null];
   return planSlide(slide.states.map((s) => s.nodes), kinds).map((segment, i) => {
     const spec = segment.kind === "clip" ? clipSpec(slide, segment.click, slide.states[0].canvas, sceneStyle) : stillSpec(slide, segment, sceneStyle);
     spec.animated = true;

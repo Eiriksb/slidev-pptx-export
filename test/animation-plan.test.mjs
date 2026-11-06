@@ -103,6 +103,11 @@ test("a slide that ends on a clip has nothing after it", () => {
   assert.deepEqual(shape(planSlide([[raster("a")], [raster("b")]], [null, "motion"])), [[0, 0], ["clip", 1]]);
 });
 
+test("a cut opens a new still slide at its own state, whatever came before", () => {
+  const states = [[box("a")], [box("b")], [box("b"), box("c")], [raster("x")], [raster("y")]];
+  assert.deepEqual(shape(planSlide(states, [null, "cut", "reveal", "motion", "cut"])), [[0, 0], [1, 2], ["clip", 3], [4, 4]]);
+});
+
 test("a still slide's runs are numbered by the slide's states, and the state it opens in has no effect", () => {
   const states = [[raster("a")], [raster("b")], [raster("b"), box("c")], [raster("b"), box("c"), box("d")]];
   const still = planSlide(states, [null, "motion", "reveal", "reveal"])[2];

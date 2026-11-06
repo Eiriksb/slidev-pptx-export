@@ -9,6 +9,8 @@
     caf: window.cancelAnimationFrame.bind(window),
     setTimeout: window.setTimeout.bind(window),
     clearTimeout: window.clearTimeout.bind(window),
+    setInterval: window.setInterval.bind(window),
+    clearInterval: window.clearInterval.bind(window),
     Date: window.Date,
   };
   let virtual = null;
@@ -19,18 +21,21 @@
   let nextId = -1;
   const frames = new Map();
   const timers = new Map();
+  const intervals = new Map();
   const gaveUpOn = new Set();
 
   performance.now = () => virtual ?? real.now();
-  window.Date = class extends real.Date {
-    constructor(...args) {
-      if (args.length === 0 && virtual !== null) super(virtual + dateOffset);
-      else super(...args);
-    }
-    static now() {
-      return virtual !== null ? virtual + dateOffset : real.dateNow();
-    }
-  };
+  // A function, not a class: Date() without new must still return a string, as it does natively.
+  const nowMs = () => (virtual !== null ? virtual + dateOffset : real.dateNow());
+  function VirtualDate(...args) {
+    if (!new.target) return new real.Date(nowMs()).toString();
+    return args.length === 0 ? new real.Date(nowMs()) : new real.Date(...args);
+  }
+  VirtualDate.prototype = real.Date.prototype;
+  VirtualDate.now = nowMs;
+  VirtualDate.parse = real.Date.parse;
+  VirtualDate.UTC = real.Date.UTC;
+  window.Date = VirtualDate;
   window.requestAnimationFrame = (cb) => {
     if (virtual === null) return real.raf(cb);
     const id = nextId--;
@@ -44,7 +49,24 @@
     timers.set(id, { fn, args, due: virtual + Number(ms || 0) });
     return id;
   };
-  window.clearTimeout = (id) => (id < 0 ? timers.delete(id) : real.clearTimeout(id));
+  window.setInterval = (fn, ms = 0, ...args) => {
+    if (virtual === null) return real.setInterval(fn, ms, ...args);
+    const id = nextId--;
+    const every = Math.max(1, Number(ms || 0));
+    intervals.set(id, { fn, args, every, due: virtual + every });
+    return id;
+  };
+  // Timeouts and intervals share their ids, so either clear function clears either, as in a browser.
+  const clear = (id, realClear) => {
+    if (id < 0) {
+      timers.delete(id);
+      intervals.delete(id);
+    } else {
+      realClear(id);
+    }
+  };
+  window.clearTimeout = (id) => clear(id, real.clearTimeout);
+  window.clearInterval = (id) => clear(id, real.clearInterval);
 
   const loadingImages = () => [...root.querySelectorAll("img")].filter((img) => !img.complete && !gaveUpOn.has(img));
 
@@ -63,14 +85,21 @@
     for (const img of loadingImages()) gaveUpOn.add(img);
   };
 
-  // Advances the clock: due timers, then animation-frame callbacks, then CSS animations. An animation
-  // that never ends is drawn but isn't waited for.
+  // Advances the clock: due timers and intervals, then animation-frame callbacks, then CSS animations.
+  // An animation that never ends is drawn but isn't waited for. `intervals` counts those the click
+  // started: an interval running is script motion, as an animation frame is.
   window.__stepClock = (dt) => {
     virtual += dt;
     for (const [id, timer] of [...timers].sort((a, b) => a[1].due - b[1].due)) {
       if (timer.due > virtual) continue;
       timers.delete(id);
       if (typeof timer.fn === "function") timer.fn(...timer.args);
+    }
+    for (const [id, interval] of [...intervals]) {
+      while (intervals.has(id) && interval.due <= virtual) {
+        interval.due += interval.every;
+        if (typeof interval.fn === "function") interval.fn(...interval.args);
+      }
     }
     const due = [...frames.values()];
     frames.clear();
@@ -87,6 +116,6 @@
         if (end !== Infinity) running++;
       }
     }
-    return { at: virtual, frames: frames.size, timers: timers.size, running, images: loadingImages().length, sinceMutation: virtual - lastMutation };
+    return { at: virtual, frames: frames.size, timers: timers.size, intervals: intervals.size, running, images: loadingImages().length, sinceMutation: virtual - lastMutation };
   };
 })();

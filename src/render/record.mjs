@@ -85,7 +85,7 @@ export async function recordClick({ browser, url, sel, canvas, tmpRoot = tmpdir(
         imagesWaited = 0;
       }
       await frame();
-      if (state.frames > 0) motionFrames++;
+      if (state.frames > 0 || state.intervals > 0) motionFrames++;
       if (state.frames === 0 && state.running === 0 && state.images === 0 && state.sinceMutation > QUIET_MS) {
         settled = true;
         break;

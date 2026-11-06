@@ -43,6 +43,14 @@ const RED_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300
 const TILE_APPEARS = page({ next: `const i=new Image();i.src='/tile.svg';i.style='position:absolute;left:0;top:0';${ROOT_EL}.append(i);` });
 const IMAGE_OUTSIDE_THE_SLIDE = page({ script: "const i=new Image();i.src='/tile.svg';document.body.append(i);", next: appendBox(GREEN.join(",")) });
 
+// A red box moved by setInterval for 1 s: ten steps of 100 ms.
+const ANIMATE_INTERVAL_1S = page({
+  body: '<div id="m" style="position:absolute;left:0;top:100px;width:100px;height:100px;background:#c00"></div>',
+  next: "let i=0;const id=setInterval(()=>{m.style.left=(++i*80)+'px';if(i>=10)clearInterval(id);},100);",
+});
+// Date() without new returns a string in a browser; a page may call it as the click starts.
+const DATE_CALLED = page({ next: "window.__when = Date(); if (typeof window.__when !== 'string') throw new Error('not a string');" + appendBox(GREEN.join(",")) });
+
 const frameName = (i) => `f${String(i).padStart(5, "0")}.jpg`;
 
 async function recordStub(t, html, { tile, ...over } = {}) {
@@ -126,6 +134,19 @@ test("the black band Slidev leaves round the slide stays out of the frames", opt
     `data:image/jpeg;base64,${readFileSync(join(r.dir, frameName(0))).toString("base64")}`,
   );
   for (const level of edges) assert.ok(level > 200, `edge row at level ${level}`);
+});
+
+test("an animation run by setInterval follows the stepped clock and counts as script motion", opts, async (t) => {
+  const r = await recordStub(t, ANIMATE_INTERVAL_1S);
+  assert.ok(r.settled);
+  assert.ok(r.motionFrames >= 28 && r.motionFrames <= 32, `motionFrames ${r.motionFrames}`);
+  assert.ok(r.changedVisibly);
+});
+
+test("a page that calls Date() without new records as it would play", opts, async (t) => {
+  const r = await recordStub(t, DATE_CALLED);
+  assert.ok(r.settled);
+  assert.equal(await frameHasColor(r.dir, r.count - 1, GREEN), true);
 });
 
 test("a CSS transition after the click is drawn but is not script motion", opts, async (t) => {

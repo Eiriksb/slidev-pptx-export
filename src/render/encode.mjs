@@ -12,12 +12,13 @@ export const ENCODER_HINT = "install ffmpeg with libx264, or GStreamer with x264
 const CRF = "23";
 const KEYFRAME_EVERY = "15";
 
-// `ffmpeg`: the program to use instead of the one on PATH (render.ffmpeg, SLIDEV_PPTX_FFMPEG); a named
-// one that can't encode H.264 is not swapped for another. `run`: spawnSync, or a stand-in for tests.
+// `ffmpeg`: a program to try before the one on PATH (render.ffmpeg, SLIDEV_PPTX_FFMPEG). `run`:
+// spawnSync, or a stand-in for tests.
 export function findEncoder({ run = spawnSync, ffmpeg: named } = {}) {
-  const bin = named || "ffmpeg";
-  const ffmpeg = run(bin, ["-hide_banner", "-encoders"], { encoding: "utf8" });
-  if (ffmpeg.status === 0 && /\blibx264\b/.test(ffmpeg.stdout || "")) return { kind: "ffmpeg", bin };
+  for (const bin of named && named !== "ffmpeg" ? [named, "ffmpeg"] : ["ffmpeg"]) {
+    const res = run(bin, ["-hide_banner", "-encoders"], { encoding: "utf8" });
+    if (res.status === 0 && /\blibx264\b/.test(res.stdout || "")) return { kind: "ffmpeg", bin };
+  }
   const has = (element) => run("gst-inspect-1.0", [element], { stdio: "ignore" }).status === 0;
   return has("x264enc") && has("mp4mux") ? { kind: "gstreamer" } : null;
 }

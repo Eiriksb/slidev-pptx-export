@@ -32,6 +32,15 @@ test("a named ffmpeg with libx264 is used before the one on PATH", () => {
   assert.equal(seen[0], "/opt/ff/ffmpeg");
 });
 
+test("a named ffmpeg that is missing or lacks libx264 gives way to the one on PATH", () => {
+  const seen = [];
+  const run = (bin) => { seen.push(bin); return bin === "ffmpeg" ? { status: 0, stdout: " V..... libx264 " } : { status: 0, stdout: " V..... mpeg4 " }; };
+  assert.deepEqual(findEncoder({ run, ffmpeg: "/opt/ff/ffmpeg" }), { kind: "ffmpeg", bin: "ffmpeg" });
+  assert.deepEqual(seen, ["/opt/ff/ffmpeg", "ffmpeg"]);
+  const missing = (bin) => (bin === "ffmpeg" ? { status: 0, stdout: "libx264" } : { status: null, error: new Error("ENOENT"), stdout: null });
+  assert.deepEqual(findEncoder({ run: missing, ffmpeg: "/nope" }), { kind: "ffmpeg", bin: "ffmpeg" });
+});
+
 test("ffmpeg's arguments start with the named program", () => {
   assert.equal(encoderArgs("ffmpeg", { dir: "/d", count: 3, fps: 30, out: "/o.mp4", bin: "/opt/ff/ffmpeg" }).bin, "/opt/ff/ffmpeg");
 });

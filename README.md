@@ -186,7 +186,7 @@ SLIDEV_PPTX_BROWSER=/usr/bin/chromium SLIDEV_PPTX_FFMPEG=/opt/ffmpeg/bin/ffmpeg 
   the animated pictures of a deck's own videos. For clips, a named ffmpeg that is missing or lacks
   `libx264` gives way to `ffmpeg` on the PATH, then GStreamer. For the animated pictures only the named
   ffmpeg is used (`ffmpeg` on the PATH when none is named); if it isn't there, those videos stay videos, with a notice.
-- A key in the config wins over its environment variable.
+- The environment variables win over the config keys: they name programs on this computer, while a config travels with the deck.
 
 ### Progress (`--progress json`)
 

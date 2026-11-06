@@ -31,6 +31,9 @@ export async function loadChromium(deckDir, { resolve = defaultResolve, executab
       if (chromium) return chromium;
     }
   }
+  if (executablePath) {
+    throw new Error(`render mode could not drive the browser at ${executablePath}: the exporter's playwright-core package is missing.`);
+  }
   throw new Error(
     "render mode needs Playwright's Chromium: run `npm i -D playwright-chromium` (the package `slidev export` uses), then `npx playwright install chromium`.",
   );

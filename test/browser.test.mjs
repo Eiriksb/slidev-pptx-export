@@ -24,3 +24,13 @@ test("playwright-core is passed over for playwright when no browser is named", a
 test("playwright-core alone with no browser named is an error that names render.browser", async () => {
   await assert.rejects(loadChromium("/d", { resolve: fake(["playwright-core"]), importer }), /render\.browser|SLIDEV_PPTX_BROWSER/);
 });
+
+test("with a browser named, nothing found names its path and the missing playwright-core, with no npx advice", async () => {
+  await assert.rejects(loadChromium("/d", { resolve: fake([]), executablePath: "/opt/shell", importer }), (err) => {
+    assert.match(err.message, /\/opt\/shell/);
+    assert.match(err.message, /playwright-core/);
+    assert.ok(!err.message.includes("npx"));
+    return true;
+  });
+  await assert.rejects(loadChromium("/d", { resolve: fake([]), importer }), /npx playwright install chromium/);
+});

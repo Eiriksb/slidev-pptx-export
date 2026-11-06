@@ -173,8 +173,9 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
   if (unused.length) console.warn(`Notice: render mode ignores ${unused.join(", ")} from pptx.config.mjs - the rendered page already shows them.`);
 
   // Playwright and its Chromium first: a missing package or browser fails before Slidev starts.
-  const executablePath = config.render?.browser ?? process.env.SLIDEV_PPTX_BROWSER;
-  const ffmpeg = config.render?.ffmpeg ?? process.env.SLIDEV_PPTX_FFMPEG;
+  // The variables name programs on this computer, a config travels with the deck: the variables win.
+  const executablePath = process.env.SLIDEV_PPTX_BROWSER ?? config.render?.browser;
+  const ffmpeg = process.env.SLIDEV_PPTX_FFMPEG ?? config.render?.ffmpeg;
   const browserOptions = executablePath ? { executablePath } : undefined;
   // `handleSignals: false` (the CLI, which stops the export itself on SIGINT/SIGTERM) turns off Playwright's
   // own handlers: its SIGINT one would exit before the export's cleanup ran. Library callers keep them.
@@ -184,7 +185,11 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
   try {
     browser = await chromium.launch(launchOptions);
   } catch (err) {
-    throw new Error(`render mode could not launch Playwright's Chromium (${String(err.message || err).split("\n")[0]}) - run \`npx playwright install chromium\`.`, { cause: err });
+    const reason = String(err.message || err).split("\n")[0];
+    throw new Error(
+      executablePath ? `render mode could not launch the browser at ${executablePath} (${reason}).` : `render mode could not launch Playwright's Chromium (${reason}) - run \`npx playwright install chromium\`.`,
+      { cause: err },
+    );
   }
   const forgetBrowser = onStop(() => browser.close());
   let captured;

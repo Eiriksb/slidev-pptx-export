@@ -487,3 +487,39 @@ test("handleSignals: false (the CLI, which stops the export itself) turns Playwr
   await renderSpecs({ ...on.args, handleSignals: true });
   assert.equal(on.calls.launchArgs?.handleSIGINT, undefined);
 });
+
+test("SLIDEV_PPTX_BROWSER wins over render.browser, and SLIDEV_PPTX_FFMPEG over render.ffmpeg", async () => {
+  const saved = { b: process.env.SLIDEV_PPTX_BROWSER, f: process.env.SLIDEV_PPTX_FFMPEG };
+  process.env.SLIDEV_PPTX_BROWSER = "/env/browser";
+  process.env.SLIDEV_PPTX_FFMPEG = "/env/ffmpeg";
+  try {
+    const { args, calls } = setup("# One\n", { userConfig: { render: { animations: true, browser: "/cfg/browser", ffmpeg: "/cfg/ffmpeg" } } });
+    const seen = [];
+    const deps = { ...animatedDeps(args, [stateSlide(1, 0, scene(1, 0, "One"))]), findEncoder: (o) => { seen.push(o.ffmpeg); return null; } };
+    await withWarnings(() => renderSpecs({ ...args, deps }));
+    assert.deepEqual(calls.launchArgs, { executablePath: "/env/browser" });
+    assert.deepEqual(seen, ["/env/ffmpeg"]);
+  } finally {
+    if (saved.b === undefined) delete process.env.SLIDEV_PPTX_BROWSER; else process.env.SLIDEV_PPTX_BROWSER = saved.b;
+    if (saved.f === undefined) delete process.env.SLIDEV_PPTX_FFMPEG; else process.env.SLIDEV_PPTX_FFMPEG = saved.f;
+  }
+});
+
+test("a named browser that won't launch is reported by its path, with no npx advice; without one the advice stays", async () => {
+  const saved = process.env.SLIDEV_PPTX_BROWSER;
+  delete process.env.SLIDEV_PPTX_BROWSER;
+  try {
+    const launchError = new Error("browserType.launch: spawn /opt/shell ENOENT\nCall log: ...");
+    const named = setup("# A\n", { userConfig: { render: { browser: "/opt/shell" } }, launchError });
+    await assert.rejects(renderSpecs(named.args), (err) => {
+      assert.equal(err.message, "render mode could not launch the browser at /opt/shell (browserType.launch: spawn /opt/shell ENOENT).");
+      assert.ok(!err.message.includes("npx"));
+      return true;
+    });
+    process.env.SLIDEV_PPTX_BROWSER = "/env/shell";
+    const fromEnv = setup("# A\n", { launchError });
+    await assert.rejects(renderSpecs(fromEnv.args), /could not launch the browser at \/env\/shell \(/);
+  } finally {
+    if (saved === undefined) delete process.env.SLIDEV_PPTX_BROWSER; else process.env.SLIDEV_PPTX_BROWSER = saved;
+  }
+});

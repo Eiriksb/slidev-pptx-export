@@ -1,12 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
+import { imageSize } from "image-size";
 import { usableChromium } from "./helpers.mjs";
 import { captureDeck } from "../../src/render/capture.mjs";
 
 const chromium = await usableChromium();
 const opts = { skip: chromium ? false : "Playwright/Chromium not available - run npm i -D playwright-chromium", timeout: 120000 };
 const textOf = (node) => node.runs.map((r) => r.text).join("");
+const PIC = new URL("../fixtures/kitchen-sink/public/pic.png", import.meta.url);
 
 // What Slidev's /<n>?print serves, boiled down: every slide in the DOM at once, plus the
 // window.__slidev__ data capture reads. Slide 1 has an image whose server never answers,
@@ -266,4 +269,114 @@ test("a deck that never shows its slides is reported for what it is: not loaded 
   }
   assert.ok(browser.isConnected(), "a browser passed in is left open");
   assert.equal(browser.contexts().flatMap((c) => c.pages()).length, 0, "its page is closed");
+});
+
+// A one-slide deck drawn by `inner`; `head` goes in the page's head.
+const oneSlide = (inner, head = "") =>
+  "<!doctype html><html><head><style>body{margin:0;font-family:Arial,sans-serif}</style>" + slidevData(1) + head + "</head><body>" + page(1, inner) + "</body></html>";
+const FILL = "position:absolute;left:0;top:0;width:980px;height:552px";
+
+test("a picture doesn't bake in the text drawn above it: that stays native alone", opts, async (t) => {
+  // the picture is white and the text over it a solid black bar of glyph-free text box: dark only if baked
+  const baseUrl = await serve(t, oneSlide(
+    `<div style="${FILL};background:#fff;filter:blur(0.5px)"></div>` +
+      '<p style="position:absolute;left:100px;top:100px;margin:0;z-index:2;font:bold 120px Arial;color:#000">OVER</p>' +
+      '<div style="position:absolute;left:100px;top:300px;width:300px;height:100px;z-index:2;background:#000"></div>'));
+  const { slides: [s] } = await captureDeck({ baseUrl, chromium });
+  const pic = s.nodes.find((n) => n.kind === "raster");
+  assert.ok(s.nodes.some((n) => n.kind === "text" && textOf(n) === "OVER"), "the text is still native");
+  assert.ok(s.nodes.some((n) => n.kind === "box" && n.fill?.hex === "000000"), "the box is still native");
+  assert.equal(await darkShare(pic.png), 0, "neither is in the picture");
+});
+
+test("a picture of what's beneath it keeps what is drawn beneath it", opts, async (t) => {
+  const baseUrl = await serve(t, oneSlide(
+    `<div style="${FILL};background:#000"></div><div style="${FILL};background:rgba(255,255,255,.01);backdrop-filter:blur(1px)"></div>`));
+  const { slides: [s] } = await captureDeck({ baseUrl, chromium });
+  const pic = s.nodes.find((n) => n.kind === "raster");
+  assert.ok((await darkShare(pic.png)) > 0.95, "the box beneath shows through");
+});
+
+test("an element running off the slide is pictured at full scale, and placed, as far as it is on the slide", opts, async (t) => {
+  // Leaflet's overlay: an inline SVG 10% larger than its map on every side. The left half is black,
+  // the right half white, so a picture drawn at the wrong scale or offset has them in the wrong place.
+  const svg =
+    '<svg style="position:absolute;left:-98px;top:-55px;width:1176px;height:662px" viewBox="0 0 1176 662">' +
+    '<rect width="1176" height="662" fill="#fff"/><rect width="588" height="662" fill="#000"/></svg>';
+  const baseUrl = await serve(t, oneSlide(svg));
+  const { slides: [s] } = await captureDeck({ baseUrl, chromium });
+  const pic = s.nodes.find((n) => n.kind === "raster");
+  assert.deepEqual(pic.rect, { x: 0, y: 0, w: 980, h: 552 }, "the part on the slide");
+  const size = imageSize(pic.png);
+  assert.deepEqual({ w: size.width, h: size.height }, { w: 1960, h: 1104 }, "at the page's device scale of 2");
+  assert.ok((await darkShare(pic.png, { x0: 0, y0: 0, x1: 0.49, y1: 1 })) > 0.99, "the left half is black");
+  assert.equal(await darkShare(pic.png, { x0: 0.51, y0: 0, x1: 1, y1: 1 }), 0, "the right half is white");
+});
+
+test("an element partly off the slide is pictured from where the slide starts, wherever the slide lies on the page", opts, async (t) => {
+  const svg =
+    '<svg style="position:absolute;left:500px;top:300px;width:1000px;height:600px" viewBox="0 0 1000 600"><rect width="1000" height="600" fill="#000"/></svg>';
+  const html = "<!doctype html><html><head><style>body{margin:0}</style>" + slidevData(2) + "</head><body>" + page(1, "<p>One</p>") + page(2, svg) + "</body></html>";
+  const baseUrl = await serve(t, html);
+  const { slides } = await captureDeck({ baseUrl, chromium });
+  const pic = slides[1].nodes.find((n) => n.kind === "raster");
+  assert.deepEqual(pic.rect, { x: 500, y: 300, w: 480, h: 252 });
+  assert.ok((await darkShare(pic.png)) > 0.99);
+});
+
+test("a slide whose scripts are still drawing is captured once they stop", opts, async (t) => {
+  const script =
+    "<script>addEventListener('DOMContentLoaded',()=>{const box=document.getElementById('out');let n=0;" +
+    "const tick=()=>{box.textContent='step '+(++n);if(n<30)setTimeout(tick,100);else box.textContent='finished'};tick()})</script>";
+  const baseUrl = await serve(t, oneSlide('<p id="out" style="margin:0">start</p>', script));
+  const { slides: [s] } = await captureDeck({ baseUrl, chromium });
+  assert.equal(textOf(s.nodes.find((n) => n.kind === "text")), "finished");
+  assert.equal(s.unsettled, undefined);
+});
+
+test("a slide waits for the images a script started loading", opts, async (t) => {
+  // the image answers after the slide's DOM has gone quiet
+  const server = createServer((req, res) => {
+    const path = new URL(req.url, "http://localhost").pathname;
+    if (path === "/slow.png") return void setTimeout(() => res.writeHead(200, { "content-type": "image/png" }).end(readFileSync(PIC)), 1500);
+    res.writeHead(200, { "content-type": "text/html" }).end(oneSlide('<div id="spot" style="width:100px;height:60px"></div>',
+      "<script>setTimeout(()=>{const i=new Image();i.src='/slow.png';i.style.cssText='width:100px;height:60px';document.getElementById('spot').append(i)},900)</script>"));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const { slides: [s] } = await captureDeck({ baseUrl: `http://127.0.0.1:${server.address().port}`, chromium });
+  const img = s.nodes.find((n) => n.kind === "image");
+  assert.ok(img?.natural?.w > 0, "the image counts as loaded");
+});
+
+test("a slide that never stops changing is captured at the timeout, and says so", opts, async (t) => {
+  const script = "<script>addEventListener('DOMContentLoaded',()=>{let n=0;setInterval(()=>{document.getElementById('out').textContent='tick '+(++n)},50)})</script>";
+  const baseUrl = await serve(t, oneSlide('<p id="out" style="margin:0">start</p>', script));
+  const started = Date.now();
+  const { slides: [s] } = await captureDeck({ baseUrl, chromium, timeout: 1500 });
+  assert.equal(s.unsettled, true);
+  assert.ok(Date.now() - started < 12000, "bounded by the timeout");
+  assert.match(textOf(s.nodes.find((n) => n.kind === "text")), /^tick/);
+});
+
+test("a picture wholly under a later picture is dropped: the later one already shows it", opts, async (t) => {
+  // A map's overlay on the map: the upper picture is a screenshot of both.
+  const baseUrl = await serve(t, oneSlide(
+    `<svg style="${FILL}" viewBox="0 0 980 552"><rect width="980" height="552" fill="#000"/></svg>` +
+      `<svg style="${FILL}" viewBox="0 0 980 552"><rect width="10" height="10" fill="#fff"/></svg>` +
+      '<svg style="position:absolute;left:10px;top:10px;width:50px;height:50px" viewBox="0 0 50 50"><rect width="50" height="50" fill="#fff"/></svg>'));
+  const { slides: [s] } = await captureDeck({ baseUrl, chromium });
+  const pics = s.nodes.filter((n) => n.kind === "raster");
+  assert.deepEqual(pics.map((n) => n.rect.w), [980, 50], "the full-slide picture beneath is gone, the one above and the small one on top stay");
+  assert.ok((await darkShare(pics[0].png)) > 0.9, "what it covered is in the picture above it");
+});
+
+test("a glass card's picture has what lies beneath it, without the card's own text", opts, async (t) => {
+  const baseUrl = await serve(t, oneSlide(
+    '<div style="position:absolute;left:100px;top:100px;width:400px;height:200px;background:rgba(255,255,255,.3);backdrop-filter:blur(2px)">' +
+      '<p style="margin:0;font:bold 120px Arial;color:#000">TEXT</p></div>'));
+  const { slides: [s] } = await captureDeck({ baseUrl, chromium });
+  const pic = s.nodes.find((n) => n.kind === "raster");
+  assert.equal(await darkShare(pic.png), 0);
+  assert.equal(textOf(s.nodes.find((n) => n.kind === "text")), "TEXT");
 });

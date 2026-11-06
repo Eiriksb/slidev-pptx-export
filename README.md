@@ -82,6 +82,11 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
   rounded corners, shadow or gradient (cards, callouts) become native shapes; lists get native bullets in their rendered colors; tables become
   native tables with each cell's own fill and borders; code blocks keep their syntax colors
   (a block that scrolls or wraps in the page is a picture instead).
+- A table scrolling in its box (or clipped by one) has the rows the page shows, since a slide can't
+  scroll; a row cut off at the box's edge is left out.
+- A card with a `backdrop-filter` keeps its contents native: under a nearly opaque fill (90% or more) it is
+  a solid box, otherwise its blur is a picture behind them. A card holding a form control (a slider) is
+  a picture as a whole.
 - Chart.js bar charts (e.g. through vue-chartjs) become native, editable charts with the
   page's data, colors, axis range and number format; horizontal bars keep their order. Only
   charts PowerPoint can draw faithfully are native: for example, other chart types, mixed
@@ -128,7 +133,11 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
   unless slide content covers them. A picture there is reported as "slide master".
 - Anything PowerPoint can't express natively (blur and other CSS filters, masks, inline SVG
   drawings, other canvases, and the cases above) is drawn as a picture of just that element,
-  with a notice naming the slide.
+  with a notice naming the slide. What the slide draws over it stays out of the picture and native;
+  what lies beneath shows in it. An element running past the slide's edges (a Leaflet map's overlay)
+  is pictured as far as it is on the slide, and a picture wholly under a later one is left out.
+- Where elements overlap they keep the page's stacking order (`z-index`, stacking contexts); elsewhere
+  shapes follow the DOM order, which is PowerPoint's reading order.
 - `colors` and `fonts` in `pptx.config.mjs` still build the theme (rendered colors that match
   become theme colors); `logo`, `eyebrowClass` and `cssVarColors` aren't needed, and a notice
   says they are ignored when the config sets them. `render: { timeout }` sets the per-slide
@@ -140,6 +149,9 @@ npx slidev-pptx-export slides.md slides-editable.pptx --render
   (for example its theme isn't installed), Chromium can't launch or the Slidev version isn't
   supported, the export stops with an error instead; Chromium is launched before Slidev
   starts, so a missing browser fails fast.
+- Each slide is captured once its scripts have stopped changing it and its images have loaded, so a
+  map that flies into place or a route drawn by `requestAnimationFrame` is exported finished. One still
+  changing after `render: { timeout }` is exported as it stands, with a notice.
 - Limits: each slide is captured in its final `v-click` state, with every fragment shown.
   Animations and transitions (videos excepted, see above), hyperlinks (link text keeps its styling) and Slidev
   drawings aren't carried over; fonts only with `--embed-fonts` (see Fonts).

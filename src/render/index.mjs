@@ -213,6 +213,7 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
       shots.push(...fallback.map(() => null));
       continue;
     }
+    if (scene.unsettled) console.warn(`Notice: slide ${no} was still changing when render.timeout ran out; exported as it stood then (raise render.timeout in pptx.config.mjs if it needs longer).`);
     for (const node of scene.nodes) {
       if (node.kind === "raster") console.warn(pictureNotice(`slide ${no}`, node));
       if (node.kind === "missing") console.warn(`Notice: slide ${no}: image ${node.src} didn't load - skipped.`);

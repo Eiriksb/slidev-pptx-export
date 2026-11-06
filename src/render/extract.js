@@ -13,6 +13,9 @@
     object: "embedded object", embed: "embedded object", math: "math",
   };
   const REPLACED = new Set(["img", "svg", "canvas", "video", "iframe", "object", "embed", "math", "audio"]);
+  const FORM_CONTROLS = "input,select,textarea,progress,meter";
+  // A fill this opaque hides what a backdrop-filter leaves behind it, near enough.
+  const BACKDROP_HIDDEN_ALPHA = 0.9;
   const IMAGE_FORMATS = { png: "png", jpg: "jpg", jpeg: "jpg", gif: "gif", svg: "svg", "svg+xml": "svg" };
   const GENERIC_FONTS = new Set(["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "emoji", "math", "fangsong"]);
   // Stands between two paragraphs (e.g. loose-list <p>s) joined into one run list.
@@ -388,6 +391,134 @@
       }
     }
 
+    // Paint order. The page draws by stacking context, not DOM order: within one, its negative
+    // z-indexes, then its in-flow content, then positioned elements by z-index (no z-index counts as
+    // 0, in tree order). A node's key is its path through those contexts, compared piece by piece; a
+    // positioned element without a z-index has its in-flow content painted with it, but its positioned
+    // descendants join the context around it, so each step is [z-index, tree position].
+    const IN_FLOW = -0.5;
+    const treeOrder = new Map();
+    for (const e of document.querySelectorAll("*")) treeOrder.set(e, treeOrder.size);
+    const isStackRoot = (e) => !e || e === pageEl || layers.bottom.includes(e) || layers.top.includes(e);
+    const zApplies = (el, cs) => cs.position !== "static" || /flex|grid/.test((el.parentElement && getComputedStyle(el.parentElement).display) || "");
+    function isStackingContext(el, cs) {
+      if (cs.zIndex !== "auto" && zApplies(el, cs)) return true;
+      if (cs.position === "fixed" || cs.position === "sticky") return true;
+      if ((parseFloat(cs.opacity) || 0) < 1 || cs.isolation === "isolate" || cs.mixBlendMode !== "normal") return true;
+      for (const p of ["transform", "translate", "rotate", "scale", "filter", "backdropFilter", "perspective", "clipPath", "maskImage", "webkitMaskImage"]) {
+        if (cs[p] && cs[p] !== "none") return true;
+      }
+      if (/layout|paint|strict|content/.test(cs.contain || "")) return true;
+      return /opacity|transform|translate|rotate|scale|filter|perspective|clip-path|mask|isolation|mix-blend-mode|z-index/.test(cs.willChange || "");
+    }
+    const paintsAlone = (e) => {
+      const cs = getComputedStyle(e);
+      return cs.position !== "static" || isStackingContext(e, cs);
+    };
+    const contextOf = (el) => {
+      let e = el;
+      while (!isStackRoot(e) && !isStackingContext(e, getComputedStyle(e))) e = e.parentElement;
+      return e;
+    };
+    const stackKeys = new Map();
+    function stackKey(el) {
+      if (isStackRoot(el)) return [];
+      if (stackKeys.has(el)) return stackKeys.get(el);
+      const cs = getComputedStyle(el);
+      let key;
+      if (paintsAlone(el)) {
+        key = [...stackKey(contextOf(el.parentElement)), (zApplies(el, cs) && parseInt(cs.zIndex, 10)) || 0, treeOrder.get(el)];
+      } else {
+        let p = el.parentElement;
+        while (!isStackRoot(p) && !paintsAlone(p)) p = p.parentElement;
+        key = contentKey(p);
+      }
+      stackKeys.set(el, key);
+      return key;
+    }
+    // Where the in-flow content of `el` is painted.
+    function contentKey(el) {
+      if (isStackRoot(el)) return [IN_FLOW, 0];
+      return paintsAlone(el) ? [...stackKey(el), IN_FLOW, 0] : stackKey(el);
+    }
+    // A positioned pseudo-element joins the context around (or made by) its element: ::before first
+    // among its element's children, ::after last. One in the flow is painted with its element's content.
+    function pseudoKey(el, { which, style: ps }) {
+      if (ps.position === "static") return contentKey(el);
+      let last = el;
+      while (last.lastElementChild) last = last.lastElementChild;
+      const at = which === "::before" ? treeOrder.get(el) + 0.25 : treeOrder.get(last) + 0.5;
+      return [...stackKey(contextOf(el)), parseInt(ps.zIndex, 10) || 0, at];
+    }
+    const compareKeys = (a, b) => {
+      for (let i = 0; i < a.length && i < b.length; i++) if (a[i] !== b[i]) return a[i] - b[i];
+      return a.length - b.length;
+    };
+    const OWN_BOX = new Set(["box", "raster", "image", "chart", "video", "missing"]);
+    // The node's element while walking, and what each node came from.
+    let owner = pageEl;
+    const sources = new Map();
+    function emit(node, pseudo = null) {
+      const key = pseudo ? pseudoKey(owner, pseudo) : OWN_BOX.has(node.kind) ? stackKey(owner) : contentKey(owner);
+      sources.set(node, { el: owner, which: pseudo && pseudo.which, key });
+      nodes.push(node);
+    }
+    const LAYER_RANK = { bottom: 0, top: 2 };
+    const rankOf = (n) => LAYER_RANK[n.layer] ?? 1;
+    // A node the page draws over another comes after it. Nodes that don't overlap keep their DOM order,
+    // which is the reading order in PowerPoint.
+    function paintSort() {
+      const painted = (a, b) => rankOf(a) - rankOf(b) || compareKeys(sources.get(a).key, sources.get(b).key);
+      const blockers = nodes.map(() => 0);
+      const blocks = nodes.map(() => []);
+      nodes.forEach((a, i) => {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const b = nodes[j];
+          if (!a.rect || !b.rect || !overlap(a.rect, b.rect)) continue;
+          const [under, over] = painted(a, b) > 0 ? [j, i] : [i, j];
+          blocks[under].push(over);
+          blockers[over]++;
+        }
+      });
+      const order = [];
+      const placed = nodes.map(() => false);
+      while (order.length < nodes.length) {
+        const i = blockers.findIndex((count, k) => count === 0 && !placed[k]);
+        placed[i] = true;
+        order.push(nodes[i]);
+        for (const k of blocks[i]) blockers[k]--;
+      }
+      nodes.splice(0, nodes.length, ...order);
+    }
+    const elIds = new Map();
+    const elSelector = (el) => {
+      if (!elIds.has(el)) {
+        elIds.set(el, elIds.size);
+        el.setAttribute("data-pptx-el", String(elIds.get(el)));
+      }
+      return `[data-pptx-el="${elIds.get(el)}"]`;
+    };
+    const overlap = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+    // A picture is a screenshot of its place on the page, with whatever is drawn over it. What is
+    // over it is exported on its own, above the picture, so it must be left out: `above` lists the
+    // selectors to hide while the picture is taken. An element holding the picture stays; only a
+    // pseudo-element of it can be hidden by itself.
+    function markAbove() {
+      nodes.forEach((n, i) => {
+        if (n.kind !== "raster" && n.kind !== "video") return;
+        const self = sources.get(n).el;
+        const above = new Set();
+        for (const m of nodes.slice(i + 1)) {
+          if (!m.rect || !overlap(n.rect, m.rect)) continue;
+          const { el, which } = sources.get(m);
+          if (el === pageEl) continue;
+          if (!el.contains(self)) above.add(elSelector(el));
+          else if (which) above.add(`${elSelector(el)}${which}`);
+        }
+        n.above = [...above];
+      });
+    }
+
     // Canvas px per CSS px, for the lengths read from computed styles (font sizes, line heights,
     // padding, borders, radii, shadows). A `zoom:` slide is a page 1/zoom as large that Slidev
     // shrinks with the `scale` property: its rects come back scaled, its computed lengths don't.
@@ -600,7 +731,10 @@
         }
       }
       if (cs.filter && cs.filter !== "none") return "CSS filter";
-      if (cs.backdropFilter && cs.backdropFilter !== "none") return "backdrop-filter";
+      // Other elements' backdrop is drawn behind their contents (see boxNode). A form control's own
+      // drawing (a slider's thumb) can't be separated from the box it overflows, so a card holding one
+      // stays a whole picture.
+      if (cs.backdropFilter && cs.backdropFilter !== "none" && (REPLACED.has(tag) || el.querySelector(FORM_CONTROLS))) return "backdrop-filter";
       const mask = cs.maskImage || cs.webkitMaskImage;
       if (mask && mask !== "none") return "mask";
       if (cs.clipPath && cs.clipPath !== "none") return "clip-path";
@@ -767,7 +901,7 @@
           if (size > 0 && shift > 0.5) rect = { ...rect, y: r2(rect.y - shift), h: r2(rect.h + shift) };
         }
         if (onCanvas(rect)) {
-          nodes.push({ kind: "text", rect, role: el === titleEl ? "title" : "body", align: textAlign(cs), lineHeight, singleLine: !multi, runs, opacity: op, rotate });
+          emit({ kind: "text", rect, role: el === titleEl ? "title" : "body", align: textAlign(cs), lineHeight, singleLine: !multi, runs, opacity: op, rotate });
         }
       }
       for (const d of deferred) walk(d, op);
@@ -944,7 +1078,7 @@
         if (!onCanvas(prect)) continue;
         const pop = op * (parseFloat(ps.opacity) || 1);
         const d = decoration(ps, prect);
-        if (d.fill || d.border || d.sides) nodes.push({ kind: "box", rect: prect, ...d, opacity: pop });
+        if (d.fill || d.border || d.sides) emit({ kind: "box", rect: prect, ...d, opacity: pop }, { which, style: ps });
         const text = transformText(pseudoText(el, ps.content), ps).trim();
         if (text) {
           // the text on one line, centred in the box's height the way a line-height equal to it does
@@ -953,7 +1087,7 @@
           const tl = px(ps.borderLeftWidth) + px(ps.paddingLeft);
           const tr = px(ps.borderRightWidth) + px(ps.paddingRight);
           const trect = { x: r2(prect.x + tl), y: r2(prect.y + (prect.h - lh) / 2), w: r2(Math.max(1, prect.w - tl - tr)), h: lh };
-          nodes.push({ kind: "text", rect: trect, role: "body", align: textAlign(ps), lineHeight: lh, singleLine: true, runs: [run], opacity: pop });
+          emit({ kind: "text", rect: trect, role: "body", align: textAlign(ps), lineHeight: lh, singleLine: true, runs: [run], opacity: pop }, { which, style: ps });
         }
       }
     }
@@ -964,14 +1098,18 @@
       const bg = backgroundImageOf(cs, rc);
       // A gradient fills the box, over its background color.
       if (bg && bg.gradient) d.fill = { gradient: bg.gradient, base: d.fill };
-      if (d.fill || d.border || d.sides || d.shadow) nodes.push({ kind: "box", rect: rc, ...d, opacity: op, rotate });
-      const why = backgroundReason(bg, op);
+      // Under a nearly opaque fill the page's blur lets almost nothing through. The box is drawn solid,
+      // or what lies behind would show through it sharp. Any other backdrop-filter is a picture.
+      const backdrop = cs.backdropFilter && cs.backdropFilter !== "none";
+      if (backdrop && d.fill && d.fill.alpha >= BACKDROP_HIDDEN_ALPHA) d.fill = { ...d.fill, alpha: 1 };
+      if (d.fill || d.border || d.sides || d.shadow) emit({ kind: "box", rect: rc, ...d, opacity: op, rotate });
+      const why = backgroundReason(bg, op) || (backdrop && !(d.fill && d.fill.alpha === 1) ? "backdrop-filter" : null);
       if (why) {
         // A background the box can't draw: a picture of the element with its contents hidden
         // (capture.mjs), drawn behind them.
-        nodes.push({ kind: "raster", id: mark(el), rect: rectOf(el.getBoundingClientRect()), reason: why, label: `${labelOf(el)} background`, alt: "", contentsHidden: true });
+        emit({ kind: "raster", id: mark(el), rect: rectOf(el.getBoundingClientRect()), reason: why, label: `${labelOf(el)} background`, alt: "", contentsHidden: true });
       } else if (bg && bg.src) {
-        nodes.push({ kind: "image", id: mark(el), rect: rc, src: bg.src, format: bg.format, fit: bg.fit, natural: null, alt: "", border: null, shadow: null, opacity: op, rotate });
+        emit({ kind: "image", id: mark(el), rect: rc, src: bg.src, format: bg.format, fit: bg.fit, natural: null, alt: "", border: null, shadow: null, opacity: op, rotate });
       }
     }
 
@@ -985,7 +1123,7 @@
       const mask = cs.maskImage || cs.webkitMaskImage;
       if ((mask && mask !== "none") || (cs.clipPath && cs.clipPath !== "none")) return false;
       if (!onCanvas(rc)) return true;
-      nodes.push({
+      emit({
         kind: "video", id: mark(el), rect: contentBox(el, cs, rc), src, poster: el.poster || null,
         fit: cs.objectFit || "contain", natural: { w: el.videoWidth, h: el.videoHeight },
         duration: Number.isFinite(el.duration) ? el.duration : null, loop: el.loop, muted: el.muted,
@@ -1007,13 +1145,13 @@
     function imageNode(el, cs, rc, rotate, op) {
       const src = el.currentSrc || el.src;
       if (!el.complete || !el.naturalWidth) {
-        nodes.push({ kind: "missing", label: labelOf(el), src });
+        emit({ kind: "missing", label: labelOf(el), src });
         return;
       }
       if (!onCanvas(rc)) return;
       const d = decoration(cs, rc);
       const radius = nativeRadius(el, cs, contentBox(el, cs, rc)) || 0;
-      nodes.push({
+      emit({
         kind: "image", id: mark(el), rect: contentBox(el, cs, rc), src, format: formatOf(src), fit: cs.objectFit || "fill", radius,
         natural: { w: el.naturalWidth, h: el.naturalHeight }, alt: el.alt || "", border: d.border, shadow: d.shadow, opacity: op, rotate,
       });
@@ -1086,7 +1224,7 @@
       const short = Math.max(0, ...items.map((it) => (it.markerWidth || 0) - it.indent));
       const rect = short > 0.5 ? { ...box, x: r2(box.x - short), w: r2(box.w + short) } : box;
       if (short > 0.5) for (const it of items) it.indent = r2(it.indent + short);
-      if (items.length && onCanvas(box)) nodes.push({ kind: "list", rect, items: items.map(({ lastTop, markerWidth, ...it }) => it), opacity: op });
+      if (items.length && onCanvas(box)) emit({ kind: "list", rect, items: items.map(({ lastTop, markerWidth, ...it }) => it), opacity: op });
     }
 
     // The opacity an element is drawn with inside `root`: the product of its own and its ancestors'
@@ -1138,8 +1276,25 @@
     // The table as one node: its grid (spans marked on the cell that starts them, the slots they
     // cover as { covered }), the measured column widths and row heights, and every cell's own
     // runs, fill, borders, padding and alignment.
+    // The rows the page shows of a table scrolling in, or clipped by, a box around it. A native table
+    // can't crop, so a row cut off at the box's edge is left out.
+    function shownRows(table, rows) {
+      let top = -Infinity;
+      let bottom = Infinity;
+      for (let e = table.parentElement; e && e !== pageEl; e = e.parentElement) {
+        if (getComputedStyle(e).overflowY === "visible") continue;
+        const inner = rectOf(e.getBoundingClientRect()).y + e.clientTop * unit;
+        top = Math.max(top, inner);
+        bottom = Math.min(bottom, inner + e.clientHeight * unit);
+      }
+      return rows.filter((tr) => {
+        const r = rectOf(tr.getBoundingClientRect());
+        return r.y >= top - 0.5 && r.y + r.h <= bottom + 0.5;
+      });
+    }
+
     function tableNode(table, op) {
-      const rows = [...table.rows].filter((tr) => getComputedStyle(tr).display !== "none");
+      const rows = shownRows(table, [...table.rows].filter((tr) => getComputedStyle(tr).display !== "none"));
       if (!rows.length) return;
       // The HTML table grid: which slot each cell starts in, and which slots spans cover.
       const grid = [];
@@ -1225,7 +1380,7 @@
         };
       }
       const rect = { x: left[0], y: rowRects[0].y, w: r2(colW.reduce((a, b) => a + b, 0)), h: r2(rowH.reduce((a, b) => a + b, 0)) };
-      if (onCanvas(rect)) nodes.push({ kind: "table", rect, colW, rowH, rows: cells, opacity: op });
+      if (onCanvas(rect)) emit({ kind: "table", rect, colW, rowH, rows: cells, opacity: op });
       if (table.caption) walk(table.caption, op);
       for (const b of later) walk(b, op);
     }
@@ -1303,7 +1458,7 @@
         const measured = rows.length ? (last > first ? (rects[last].top - rects[first].top) / (last - first) : rects[first].height) / scale : null;
         pitch = r2(measured ?? px(cs.fontSize) * 1.2);
       }
-      nodes.push({
+      emit({
         kind: "code", rect: contentBox(pre, cs, box), lines: lines.map((runs) => tidyRuns(runs, { whiteSpace: "pre" })),
         lineHeight: pitch, opacity: op,
       });
@@ -1479,7 +1634,7 @@
       if (!onCanvas(rc)) return;
       const found = findChart(canvasEl);
       const picture = (reason) =>
-        nodes.push({
+        emit({
           kind: "raster", id: mark(canvasEl), rect: rc, reason, label: labelOf(canvasEl), alt: canvasEl.getAttribute("aria-label") || "",
           components: found.components, chartRect: contentBox(canvasEl, cs, box),
         });
@@ -1498,10 +1653,17 @@
       // The chart is drawn inside the canvas's content box; a background, border or shadow on the
       // canvas itself is its own box.
       boxNode(canvasEl, cs, box, rotate, op);
-      nodes.push({ kind: "chart", id: nextId++, rect: contentBox(canvasEl, cs, box), components: found.components, chart: spec, opacity: op });
+      emit({ kind: "chart", id: nextId++, rect: contentBox(canvasEl, cs, box), components: found.components, chart: spec, opacity: op });
     }
 
     function walk(el, opacity) {
+      const outer = owner;
+      owner = el;
+      walkElement(el, opacity);
+      owner = outer;
+    }
+
+    function walkElement(el, opacity) {
       const tag = el.localName;
       if (SKIP_TAGS.has(tag)) return;
       const cs = getComputedStyle(el);
@@ -1525,7 +1687,7 @@
         const node = { kind: "raster", id: mark(el), rect: rc, reason, label: labelOf(el), alt: el.getAttribute("alt") || el.getAttribute("aria-label") || "" };
         // A canvas pictured for its own styling may still be a chart a resolver replaces.
         if (tag === "canvas") Object.assign(node, { components: findChart(el).components, chartRect: contentBox(el, cs, rc) });
-        nodes.push(node);
+        emit(node);
         return;
       }
       const t = transformOf(cs);
@@ -1618,6 +1780,8 @@
     walkLayers("bottom");
     content(pageEl, getComputedStyle(pageEl), 1, rectOf(origin), 0);
     walkLayers("top");
+    paintSort();
+    markAbove();
     const layout = layoutRoot.classList && layoutRoot.classList.contains("slidev-layout")
       ? [...layoutRoot.classList].find((c) => c !== "slidev-layout") || "default"
       : "default";

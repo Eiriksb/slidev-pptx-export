@@ -269,3 +269,32 @@ test("a slide that can't be captured at all is a failed slide, with no notice fr
   assert.equal(slides[0].sourceIndex, 0);
   assert.deepEqual(lines, []);
 });
+
+test("progress: start, then each slide's states, each state, the recording, the clip and its notice, in order", opts, async (t) => {
+  const events = [];
+  await captureStates(t, TO_WHITE, {
+    record: recording(fakeFrames(60), { count: 60 }),
+    onProgress: (e) => events.push(e),
+    notice: (text) => events.push({ event: "notice", text }),
+  });
+  assert.deepEqual(events.map((e) => e.event), ["start", "slide", "state", "state", "record", "clip", "notice"]);
+  assert.deepEqual(events.slice(0, 6), [
+    { event: "start", slides: 1 },
+    { event: "slide", slide: 1, states: 2 },
+    { event: "state", slide: 1, state: 0 },
+    { event: "state", slide: 1, state: 1 },
+    { event: "record", slide: 1, click: 1 },
+    { event: "clip", slide: 1, click: 1, seconds: 2, bytes: 3 },
+  ]);
+  assert.match(events[6].text, /^Notice: slide 1 click 1: clip/);
+});
+
+test("progress: a slide exported in its final state says it has one state after all", opts, async (t) => {
+  const events = [];
+  await captureStates(t, CLICK_STATE_FAILS, { onProgress: (e) => events.push(e) });
+  assert.deepEqual(events.slice(1), [
+    { event: "slide", slide: 1, states: 2 },
+    { event: "state", slide: 1, state: 0 },
+    { event: "slide", slide: 1, states: 1 },
+  ]);
+});

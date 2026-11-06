@@ -35,11 +35,13 @@ function usableLogo(logo, configDir) {
  * @param {object} [options.config] - see default-config.mjs; typically loaded from a deck's pptx.config.mjs
  * @param {string} [options.configDir] - directory config-relative paths (logo.path) resolve against; defaults to inputPath's directory
  * @param {boolean} [options.embedFonts] - embed the fonts the slides use (TrueType, licence permitting; see README "Fonts")
+ * @param {(event: object) => void} [options.onProgress] - called with each progress event: start, slide, state, record, clip, write, done
  * @param {boolean|{screenshots?: boolean, animations?: boolean}} [options.render] - render the deck with its own Slidev in Chromium and convert what is drawn (see README "Render mode"). `animations`, here or as `config.render.animations`, implies render mode and plays the deck's clicks and transitions in the slide show (see README "Animations")
- * @returns {Promise<{ outputPath: string, slideCount: number, translatedCharts: number, unresolvedCharts: string[], screenshots?: (Buffer|null)[] }>}
+ * @returns {Promise<{ outputPath: string, slideCount: number, clips: number, bytes: number, translatedCharts: number, unresolvedCharts: string[], screenshots?: (Buffer|null)[] }>}
  *   `screenshots` (render mode with `screenshots: true`): Slidev's own screenshot of each exported slide, null for a slide exported from markdown, and all null with animations on
  */
 export async function convert(options) {
+  const onProgress = options.onProgress || (() => {});
   const inputPath = resolve(options.inputPath);
   const raw = readFileSync(inputPath, "utf8");
   const inputDir = dirname(inputPath);
@@ -73,13 +75,14 @@ export async function convert(options) {
   if (render) {
     // Loaded only here: the static export never touches the browser pipeline.
     const { renderSpecs } = await import("./render/index.mjs");
-    rendered = await renderSpecs({ inputPath, userConfig: options.config || {}, config, parsed, codeStore, screenshots: render.screenshots === true });
+    rendered = await renderSpecs({ inputPath, userConfig: options.config || {}, config, parsed, codeStore, screenshots: render.screenshots === true, onProgress });
     ({ specs, style } = rendered);
   } else {
     specs = layoutDeck(parsed, codeStore, config);
     style = deckStyle(config);
   }
 
+  onProgress({ event: "write" });
   const buffer = await writePptx(specs, {
     geometry: style.geometry,
     theme: style.theme,
@@ -97,11 +100,15 @@ export async function convert(options) {
 
   const outputPath = resolve(options.outputPath || `${basename(inputPath, extname(inputPath))}-editable.pptx`);
   await writeFile(outputPath, buffer);
+  const clips = rendered?.clips ?? 0;
+  onProgress({ event: "done", path: outputPath, slides: specs.length, clips, bytes: buffer.length });
 
   // specs, not parsed slides: a long table can continue onto extra slides.
   const result = {
     outputPath,
     slideCount: specs.length,
+    clips,
+    bytes: buffer.length,
     translatedCharts: rendered ? rendered.translatedCharts : chartBlocks.filter((b) => b.resolved).length,
     unresolvedCharts: rendered ? [] : [...new Set(chartBlocks.filter((b) => !b.resolved).map((b) => b.name))],
   };

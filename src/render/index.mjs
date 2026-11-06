@@ -162,10 +162,11 @@ function animatedResult(captured, { inputPath, parsed, codeStore, config, style,
     }
     specs.push(...slideSpecs(slide, sceneStyle));
   }
-  return { specs, style, screenshots: specs.map(() => null), translatedCharts: chartsIn(specs), masterShapes: [] };
+  const clips = captured.slides.reduce((n, s) => n + (s.clicks || []).filter((c) => c?.kind === "motion").length, 0);
+  return { specs, style, screenshots: specs.map(() => null), translatedCharts: chartsIn(specs), masterShapes: [], clips };
 }
 
-export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, codeStore, screenshots = false, deps = {} }) {
+export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, codeStore, screenshots = false, deps = {}, onProgress = () => {} }) {
   const { start = startDeckServer, chromiumFor = loadChromium, capture = captureDeck, captureStates = captureClickStates, findEncoder = findClipEncoder } = deps;
   const unused = UNUSED_KEYS.filter((k) => userConfig[k] != null);
   if (unused.length) console.warn(`Notice: render mode ignores ${unused.join(", ")} from pptx.config.mjs - the rendered page already shows them.`);
@@ -185,7 +186,7 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
   try {
     const server = await start({ inputPath });
     try {
-      const options = { baseUrl: server.url, browser, timeout: config.render?.timeout ?? 15000, slidevVersion: server.version };
+      const options = { baseUrl: server.url, browser, timeout: config.render?.timeout ?? 15000, slidevVersion: server.version, onProgress };
       captured = config.render?.animations ? await captureStates({ ...options, encoder: findEncoder({ ffmpeg }) }) : await capture({ ...options, screenshots });
     } catch (err) {
       // A deck that fails to build or boot shows up here; Slidev's own output says why.

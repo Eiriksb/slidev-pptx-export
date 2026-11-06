@@ -27,20 +27,28 @@ const clicksTotal = (page) =>
     return Number(total && typeof total === "object" ? total.value : total) || 0;
   });
 
-async function statesOf(page, baseUrl, s, canvas, timeout) {
+// `announced` records how far the progress events have got, so a failure part way leaves them consistent.
+async function statesOf(page, baseUrl, s, canvas, timeout, onProgress, announced) {
   const at = (k) => ({ url: `${baseUrl}/${s.no}?clicks=${k}`, jpeg: true });
   const states = [await captureSlide(page, baseUrl, s, canvas, true, timeout, at(0))];
   const total = await clicksTotal(page);
-  for (let k = 1; k <= total; k++) states.push(await captureSlide(page, baseUrl, s, canvas, true, timeout, at(k)));
+  onProgress({ event: "slide", slide: s.no, states: total + 1 });
+  announced.slide = true;
+  onProgress({ event: "state", slide: s.no, state: 0 });
+  for (let k = 1; k <= total; k++) {
+    states.push(await captureSlide(page, baseUrl, s, canvas, true, timeout, at(k)));
+    onProgress({ event: "state", slide: s.no, state: k });
+  }
   return states;
 }
 
 // A click that changed a picture: records it to see whether the page moves by script, and if it does,
 // makes the clip. Anything that goes wrong costs the clip, not the export: the click is then a Fade.
-async function recordedClick({ page, baseUrl, s, k, canvas, state, timeout, record, encoder, encode, notice }) {
+async function recordedClick({ page, baseUrl, s, k, canvas, state, timeout, record, encoder, encode, notice, onProgress }) {
   const where = `slide ${s.no} click ${k}`;
   const reveal = { kind: "reveal" };
   let rec;
+  onProgress({ event: "record", slide: s.no, click: k });
   try {
     rec = await record({ browser: page.context().browser(), url: `${baseUrl}/${s.no}?clicks=${k - 1}`, sel: `.slidev-page-${s.no}`, canvas, timeout: Math.max(timeout, RECORD_TIMEOUT_MS) });
   } catch (err) {
@@ -57,6 +65,7 @@ async function recordedClick({ page, baseUrl, s, k, canvas, state, timeout, reco
     const changed = await changedShare(page, readFileSync(frameFile(rec.dir, rec.count - 1)), state.screenshot);
     if (changed > DIFFERENT_ENDING) notice(`Notice: ${where}: the clip's last frame differs from a fresh load of the slide (the page's live state differs from a fresh load, or a recording is wrong).`);
     const duration = rec.count / rec.fps;
+    onProgress({ event: "clip", slide: s.no, click: k, seconds: Math.round(duration * 10) / 10, bytes: data.length });
     notice(`Notice: ${where}: clip, ${duration.toFixed(1)} s, ${(data.length / 2 ** 20).toFixed(1)} MB.`);
     const { width, height } = clipFrame(canvas);
     return { kind: "motion", clip: { data, poster: readFileSync(frameFile(rec.dir, 0)), duration, natural: { w: width, h: height } } };
@@ -68,15 +77,19 @@ async function recordedClick({ page, baseUrl, s, k, canvas, state, timeout, reco
   }
 }
 
-async function captureOne({ page, baseUrl, s, canvas, timeout, record, encoder, encode, notice }) {
+async function captureOne({ page, baseUrl, s, canvas, timeout, record, encoder, encode, notice, onProgress }) {
   const source = { index: s.no, sourceIndex: s.sourceIndex, filepath: s.filepath };
   const slide = { ...source, notes: s.notes, transition: s.transition };
   let states;
+  const announced = { slide: false };
   try {
-    states = await statesOf(page, baseUrl, s, canvas, timeout);
+    states = await statesOf(page, baseUrl, s, canvas, timeout, onProgress, announced);
   } catch (err) {
     try {
       const final = await captureSlide(page, baseUrl, s, canvas, false, timeout, { jpeg: true });
+      // What was announced no longer holds: the slide is exported as its one final state.
+      onProgress({ event: "slide", slide: s.no, states: 1 });
+      if (!announced.slide) onProgress({ event: "state", slide: s.no, state: 0 });
       notice(`Notice: slide ${s.no}: its click states couldn't be captured (${firstLine(err)}) - exported in its final state.`);
       return { ...slide, states: [final], clicks: [] };
     } catch (failed) {
@@ -86,7 +99,7 @@ async function captureOne({ page, baseUrl, s, canvas, timeout, record, encoder, 
   const clicks = states.length > 1 ? [null] : [];
   for (let k = 1; k < states.length; k++) {
     const changed = pictureChanged(states[k - 1].nodes, states[k].nodes);
-    clicks.push(changed ? await recordedClick({ page, baseUrl, s, k, canvas, state: states[k], timeout, record, encoder, encode, notice }) : { kind: "reveal" });
+    clicks.push(changed ? await recordedClick({ page, baseUrl, s, k, canvas, state: states[k], timeout, record, encoder, encode, notice, onProgress }) : { kind: "reveal" });
   }
   for (const state of states) delete state.screenshot;
   return { ...slide, states, clicks };
@@ -95,13 +108,14 @@ async function captureOne({ page, baseUrl, s, canvas, timeout, record, encoder, 
 // { canvas, slides }. A slide is { index, sourceIndex, filepath, notes, transition, states, clicks }, with
 // clicks[k] for k >= 1 being { kind: "reveal" } or { kind: "motion", clip: { data, poster, duration, natural } };
 // or, when it couldn't be captured, { index, sourceIndex, filepath, error }.
-export async function captureClickStates({ baseUrl, browser, timeout = 15000, slidevVersion = "unknown", record = recordClick, encoder = findEncoder(), encode = encodeClip, notice = console.warn }) {
+export async function captureClickStates({ baseUrl, browser, timeout = 15000, slidevVersion = "unknown", record = recordClick, encoder = findEncoder(), encode = encodeClip, notice = console.warn, onProgress = () => {} }) {
   const page = await browser.newPage({ viewport: { width: 980, height: 552 }, deviceScaleFactor: 2 });
   try {
     page.setDefaultTimeout(timeout);
     const { canvas, list } = await openDeck(page, baseUrl, timeout, slidevVersion);
+    onProgress({ event: "start", slides: list.length });
     const slides = [];
-    for (const s of list) slides.push(await captureOne({ page, baseUrl, s, canvas, timeout, record, encoder, encode, notice }));
+    for (const s of list) slides.push(await captureOne({ page, baseUrl, s, canvas, timeout, record, encoder, encode, notice, onProgress }));
     return { canvas, slides };
   } finally {
     await page.close();

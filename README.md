@@ -212,9 +212,11 @@ whole.
 ### From a .sptx
 
 [Stagepack](https://github.com/Eiriksb/stagepack) packs a Slidev presentation into one `.sptx` file. Its
-installers bring this exporter, a headless browser and ffmpeg, and add *Export to PowerPoint (editable)*
-and *Export to PowerPoint (with animations)* to the `.sptx` right-click menu. They use the options above
-to name the browser and ffmpeg they installed and to follow the export's progress.
+installers bring this exporter and ffmpeg, and add *Export to PowerPoint (editable)* and *Export to
+PowerPoint (with animations)* to the `.sptx` right-click menu. They bring no browser. The exporter drives the
+Chrome, Edge or Chromium already on the computer (on Linux, a Chromium that isn't a snap package; Windows
+has Edge). Stagepack names the browser with `SLIDEV_PPTX_BROWSER` and ffmpeg with `SLIDEV_PPTX_FFMPEG`,
+passes `--no-animations` for the editable export, and follows the export with `--progress json`.
 
 ## Animations (`--animations`)
 
@@ -227,6 +229,9 @@ in `convert`) is render mode that also carries the deck's clicks and slide trans
 `.pptx` steps through them in the slide show in the same order as Slidev. It is made for presenting
 from **PowerPoint for the web** with a **keyboard or clicker**. Keep the default export as the copy you
 edit: this one is for presenting.
+
+`--no-animations` turns animations off even if the config turns them on. It doesn't turn render mode on or
+off. If `--animations` and `--no-animations` are both given, the last one wins.
 
 What becomes what:
 

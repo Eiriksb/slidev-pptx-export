@@ -59,7 +59,8 @@ export async function startDeckServer({ inputPath, timeout = 60000 }) {
     exited = code ?? signal ?? "unknown";
   });
   const log = () => lines.filter((l) => l.trim()).join("\n");
-  const forget = onStop(() => stop());
+  // `forget` is replaced once `stop` exists: when a stop has already begun, onStop runs `stop` at once.
+  let forget = () => {};
   const stop = () =>
     new Promise((resolve) => {
       forget();
@@ -68,6 +69,7 @@ export async function startDeckServer({ inputPath, timeout = 60000 }) {
       child.kill();
       setTimeout(() => child.kill("SIGKILL"), 3000).unref();
     });
+  forget = onStop(() => stop());
 
   // Slidev is asked to bind 127.0.0.1, but some versions listen on "localhost" anyway, which can be
   // the IPv6 loopback only (Slidev 53 on Linux): whichever answers is the deck's address.

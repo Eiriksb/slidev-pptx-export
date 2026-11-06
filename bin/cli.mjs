@@ -99,7 +99,7 @@ async function main(argv, emit) {
   const outputArg = positional[1] || `${basename(inputPath, extname(inputPath))}-editable.pptx`;
   const outputPath = resolve(process.cwd(), outputArg);
 
-  const result = await convert({ inputPath, outputPath, config, configDir, render, embedFonts, onProgress: progress ? (event) => emit(event) : undefined });
+  const result = await convert({ inputPath, outputPath, config, configDir, render, embedFonts, handleSignals: false, onProgress: progress ? (event) => emit(event) : undefined });
   console.log(`Wrote ${result.slideCount} slides to ${result.outputPath}`);
   if (result.translatedCharts) console.log(`Translated ${result.translatedCharts} chart(s) into native editable PowerPoint content.`);
   if (result.unresolvedCharts.length) {
@@ -115,12 +115,13 @@ const emit = wantsJson(argv) ? jsonProgress() : null;
 let stopping = false;
 for (const [signal, code] of [["SIGTERM", 143], ["SIGINT", 130]]) {
   process.on(signal, async () => {
-    if (stopping) return;
+    const finish = () => (emit ? emit({ event: "error", message: "stopped" }, () => process.exit(code)) : process.exit(code));
+    // A second signal ends it at once.
+    if (stopping) return process.exit(code);
     stopping = true;
     await runStop();
     console.error("Stopped.");
-    if (emit) emit({ event: "error", message: "stopped" }, () => process.exit(code));
-    else process.exit(code);
+    finish();
   });
 }
 

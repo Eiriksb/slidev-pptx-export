@@ -167,7 +167,7 @@ function animatedResult(captured, { inputPath, parsed, codeStore, config, style,
   return { specs, style, screenshots: specs.map(() => null), translatedCharts: chartsIn(specs), masterShapes: [], clips };
 }
 
-export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, codeStore, screenshots = false, deps = {}, onProgress = () => {} }) {
+export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, codeStore, screenshots = false, handleSignals = true, deps = {}, onProgress = () => {} }) {
   const { start = startDeckServer, chromiumFor = loadChromium, capture = captureDeck, captureStates = captureClickStates, findEncoder = findClipEncoder } = deps;
   const unused = UNUSED_KEYS.filter((k) => userConfig[k] != null);
   if (unused.length) console.warn(`Notice: render mode ignores ${unused.join(", ")} from pptx.config.mjs - the rendered page already shows them.`);
@@ -176,11 +176,13 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
   const executablePath = config.render?.browser ?? process.env.SLIDEV_PPTX_BROWSER;
   const ffmpeg = config.render?.ffmpeg ?? process.env.SLIDEV_PPTX_FFMPEG;
   const browserOptions = executablePath ? { executablePath } : undefined;
+  // `handleSignals: false` (the CLI, which stops the export itself on SIGINT/SIGTERM) turns off Playwright's
+  // own handlers: its SIGINT one would exit before the export's cleanup ran. Library callers keep them.
+  const launchOptions = handleSignals === false ? { ...browserOptions, handleSIGINT: false, handleSIGTERM: false } : browserOptions;
   const chromium = await chromiumFor(dirname(inputPath), browserOptions);
   let browser;
   try {
-    // The CLI stops the export on SIGINT/SIGTERM itself (bin/cli.mjs); Playwright's own handlers would exit first.
-    browser = await chromium.launch({ ...browserOptions, handleSIGINT: false, handleSIGTERM: false });
+    browser = await chromium.launch(launchOptions);
   } catch (err) {
     throw new Error(`render mode could not launch Playwright's Chromium (${String(err.message || err).split("\n")[0]}) - run \`npx playwright install chromium\`.`, { cause: err });
   }

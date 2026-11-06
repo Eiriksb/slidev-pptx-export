@@ -426,18 +426,18 @@ test("a named browser (render.browser or SLIDEV_PPTX_BROWSER) is passed to chrom
     delete process.env.SLIDEV_PPTX_BROWSER;
     const none = setup("# A\n", { slides: [scene(1, 0, "A")] });
     await renderSpecs(none.args);
-    assert.deepEqual(none.calls.launchArgs, { handleSIGINT: false, handleSIGTERM: false }, "the CLI, not Playwright, handles the stop signals");
+    assert.deepEqual(none.calls.launchArgs ?? {}, {}, "by default Playwright keeps its own signal handling");
     assert.equal(none.calls.chromiumForArgs?.executablePath, undefined);
 
     const cfg = setup("# A\n", { userConfig: { render: { browser: "/opt/shell" } }, slides: [scene(1, 0, "A")] });
     await renderSpecs(cfg.args);
-    assert.deepEqual(cfg.calls.launchArgs, { executablePath: "/opt/shell", handleSIGINT: false, handleSIGTERM: false });
+    assert.deepEqual(cfg.calls.launchArgs, { executablePath: "/opt/shell" });
     assert.deepEqual(cfg.calls.chromiumForArgs, { executablePath: "/opt/shell" });
 
     process.env.SLIDEV_PPTX_BROWSER = "/opt/env-shell";
     const env = setup("# A\n", { slides: [scene(1, 0, "A")] });
     await renderSpecs(env.args);
-    assert.deepEqual(env.calls.launchArgs, { executablePath: "/opt/env-shell", handleSIGINT: false, handleSIGTERM: false });
+    assert.deepEqual(env.calls.launchArgs, { executablePath: "/opt/env-shell" });
     assert.deepEqual(env.calls.chromiumForArgs, { executablePath: "/opt/env-shell" });
   } finally {
     if (saved === undefined) delete process.env.SLIDEV_PPTX_BROWSER;
@@ -476,4 +476,14 @@ test("SLIDEV_PPTX_FFMPEG names the program when the config does not", async () =
   } finally {
     if (saved === undefined) delete process.env.SLIDEV_PPTX_FFMPEG; else process.env.SLIDEV_PPTX_FFMPEG = saved;
   }
+});
+
+test("handleSignals: false (the CLI, which stops the export itself) turns Playwright's SIGINT/SIGTERM handling off", async () => {
+  const off = setup("# A\n", { slides: [scene(1, 0, "A")] });
+  await renderSpecs({ ...off.args, handleSignals: false });
+  assert.equal(off.calls.launchArgs.handleSIGINT, false);
+  assert.equal(off.calls.launchArgs.handleSIGTERM, false);
+  const on = setup("# A\n", { slides: [scene(1, 0, "A")] });
+  await renderSpecs({ ...on.args, handleSignals: true });
+  assert.equal(on.calls.launchArgs?.handleSIGINT, undefined);
 });

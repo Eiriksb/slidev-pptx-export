@@ -35,6 +35,7 @@ function usableLogo(logo, configDir) {
  * @param {object} [options.config] - see default-config.mjs; typically loaded from a deck's pptx.config.mjs
  * @param {string} [options.configDir] - directory config-relative paths (logo.path) resolve against; defaults to inputPath's directory
  * @param {boolean} [options.embedFonts] - embed the fonts the slides use (TrueType, licence permitting; see README "Fonts")
+ * @param {boolean} [options.handleSignals] - `false` turns off Playwright's own SIGINT/SIGTERM handling in render mode, for a caller that stops the export itself (the CLI); default true
  * @param {(event: object) => void} [options.onProgress] - called with each progress event: start, slide, state, record, clip, write, done
  * @param {boolean|{screenshots?: boolean, animations?: boolean}} [options.render] - render the deck with its own Slidev in Chromium and convert what is drawn (see README "Render mode"). `animations`, here or as `config.render.animations`, implies render mode and plays the deck's clicks and transitions in the slide show (see README "Animations")
  * @returns {Promise<{ outputPath: string, slideCount: number, clips: number, bytes: number, translatedCharts: number, unresolvedCharts: string[], screenshots?: (Buffer|null)[] }>}
@@ -75,7 +76,7 @@ export async function convert(options) {
   if (render) {
     // Loaded only here: the static export never touches the browser pipeline.
     const { renderSpecs } = await import("./render/index.mjs");
-    rendered = await renderSpecs({ inputPath, userConfig: options.config || {}, config, parsed, codeStore, screenshots: render.screenshots === true, onProgress });
+    rendered = await renderSpecs({ inputPath, userConfig: options.config || {}, config, parsed, codeStore, screenshots: render.screenshots === true, handleSignals: options.handleSignals, onProgress });
     ({ specs, style } = rendered);
   } else {
     specs = layoutDeck(parsed, codeStore, config);

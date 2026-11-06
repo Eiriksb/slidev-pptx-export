@@ -165,6 +165,59 @@ Render mode needs the deck's dependencies installed (`npm install` in the deck f
 `playwright-chromium`, then `playwright`, each first in the deck folder and then next to this
 package. It takes roughly 10–30 seconds per deck.
 
+### Choosing the browser and ffmpeg
+
+By default the browser is Playwright's Chromium. To drive another Chromium-family browser (Chrome, Edge,
+Chromium from a package manager) name its executable, in `pptx.config.mjs` or the environment:
+
+```js
+export default { render: { browser: "/usr/bin/chromium", ffmpeg: "/opt/ffmpeg/bin/ffmpeg" } };
+```
+
+```bash
+SLIDEV_PPTX_BROWSER=/usr/bin/chromium SLIDEV_PPTX_FFMPEG=/opt/ffmpeg/bin/ffmpeg \
+  npx slidev-pptx-export slides.md slides-editable.pptx --render
+```
+
+- `render.browser` / `SLIDEV_PPTX_BROWSER` names the executable. `playwright-core` is enough to drive it, so
+  Playwright's own download isn't needed; if `playwright-chromium` or `playwright` is installed, that is
+  used first.
+- `render.ffmpeg` / `SLIDEV_PPTX_FFMPEG` is the ffmpeg used for recorded clips (`--animations`) and for
+  the animated pictures of a deck's own videos. For clips, a named ffmpeg that is missing or lacks
+  `libx264` gives way to `ffmpeg` on the PATH, then GStreamer. For the animated pictures only the named
+  ffmpeg is used (`ffmpeg` on the PATH when none is named); if it isn't there, those videos stay videos, with a notice.
+- The environment variables win over the config keys: they name programs on this computer, while a config travels with the deck.
+
+### Progress (`--progress json`)
+
+With `--progress json` stdout carries only the export's progress, one JSON object per line, for a program
+that runs the exporter and shows it. What the export says for people (`Notice:` and `Warning:` lines,
+errors) stays on stderr.
+
+| `event` | When | Other fields |
+| --- | --- | --- |
+| `start` | the deck is open | `slides` |
+| `slide` | a slide is being captured | `slide`, `states` (1 + its clicks, with `--animations`) |
+| `state` | one state of a slide is captured | `slide`, `state` (0 is the first) |
+| `record` | a click is being recorded | `slide`, `click` |
+| `clip` | a click's recording is encoded | `slide`, `click`, `seconds`, `bytes` |
+| `notice` | the export printed a warning | `text` |
+| `write` | the file is being written | |
+| `done` | the file is written | `path`, `slides`, `clips`, `bytes` |
+| `error` | the export failed (always the last line) | `message` |
+
+The `.pptx` is written as `<out>.partial` and renamed when complete, so a file with the final name is
+whole.
+
+### From a .sptx
+
+[Stagepack](https://github.com/Eiriksb/stagepack) packs a Slidev presentation into one `.sptx` file. Its
+installers bring this exporter and ffmpeg, and add *Export to PowerPoint (editable)* and *Export to
+PowerPoint (with animations)* to the `.sptx` right-click menu. They bring no browser. The exporter drives the
+Chrome, Edge or Chromium already on the computer (on Linux, a Chromium that isn't a snap package; Windows
+has Edge). Stagepack names the browser with `SLIDEV_PPTX_BROWSER` and ffmpeg with `SLIDEV_PPTX_FFMPEG`,
+passes `--no-animations` for the editable export, and follows the export with `--progress json`.
+
 ## Animations (`--animations`)
 
 ```bash
@@ -176,6 +229,9 @@ in `convert`) is render mode that also carries the deck's clicks and slide trans
 `.pptx` steps through them in the slide show in the same order as Slidev. It is made for presenting
 from **PowerPoint for the web** with a **keyboard or clicker**. Keep the default export as the copy you
 edit: this one is for presenting.
+
+`--no-animations` turns animations off even if the config turns them on. It doesn't turn render mode on or
+off. If `--animations` and `--no-animations` are both given, the last one wins.
 
 What becomes what:
 

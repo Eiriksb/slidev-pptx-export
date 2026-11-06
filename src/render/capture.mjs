@@ -9,17 +9,20 @@ const EXTRACT = readFileSync(new URL("./extract.js", import.meta.url), "utf8");
 
 // `browser`: a launched Playwright browser to use (left open), else one is launched from `chromium`
 // (and closed).
-export async function captureDeck({ baseUrl, browser: given = null, chromium, timeout = 15000, screenshots = false, slidevVersion = "unknown" }) {
+export async function captureDeck({ baseUrl, browser: given = null, chromium, timeout = 15000, screenshots = false, slidevVersion = "unknown", onProgress = () => {} }) {
   const browser = given ?? (await chromium.launch());
   let page = null;
   try {
     page = await browser.newPage({ viewport: { width: 980, height: 552 }, deviceScaleFactor: 2 });
     page.setDefaultTimeout(timeout);
     const { canvas, list } = await openDeck(page, baseUrl, timeout, slidevVersion);
+    onProgress({ event: "start", slides: list.length });
     const slides = [];
     for (const s of list) {
+      onProgress({ event: "slide", slide: s.no, states: 1 });
       try {
         slides.push(await captureSlide(page, baseUrl, s, canvas, screenshots, timeout));
+        onProgress({ event: "state", slide: s.no, state: 0 });
       } catch (err) {
         slides.push({ index: s.no, sourceIndex: s.sourceIndex, filepath: s.filepath, error: String(err.message || err).split("\n")[0] });
       }

@@ -380,3 +380,17 @@ test("a glass card's picture has what lies beneath it, without the card's own te
   assert.equal(await darkShare(pic.png), 0);
   assert.equal(textOf(s.nodes.find((n) => n.kind === "text")), "TEXT");
 });
+
+test("progress: start, then each slide has one state", opts, async (t) => {
+  const html = `<!doctype html><body>${slidevData(2)}${page(1, "<p>One</p>")}${page(2, "<p>Two</p>")}</body>`;
+  const baseUrl = await serve(t, html);
+  const events = [];
+  await captureDeck({ baseUrl, chromium, timeout: 15000, onProgress: (e) => events.push(e) });
+  assert.deepEqual(events, [
+    { event: "start", slides: 2 },
+    { event: "slide", slide: 1, states: 1 },
+    { event: "state", slide: 1, state: 0 },
+    { event: "slide", slide: 2, states: 1 },
+    { event: "state", slide: 2, state: 0 },
+  ]);
+});

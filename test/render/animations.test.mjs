@@ -2,8 +2,8 @@
 // npm --prefix test/fixtures/animated-deck ci
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execFile, spawn, execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -118,3 +118,91 @@ test("without the flag the same deck has one slide each and no effects", opts, a
   for (const s of slides) assert.doesNotMatch(s, /<p:timing|<p:transition/);
   assert.equal(z.names.filter((n) => n.endsWith(".mp4")).length, 0);
 });
+
+// --progress json: stdout is the progress events and nothing else, one JSON object a line.
+const jsonLines = (stdout) => stdout.split("\n").filter(Boolean).map((l) => JSON.parse(l));
+const cli = (args) => promisify(execFile)(process.execPath, [join(ROOT, "bin/cli.mjs"), ...args], { cwd: work, maxBuffer: 2 ** 24 });
+
+test("--progress json writes only JSON lines to stdout: start first, done last", opts, async () => {
+  const out = join(work, "progress.pptx");
+  const { stdout, stderr } = await cli([SLIDES, out, "--animations", "--progress", "json"]);
+  const events = jsonLines(stdout);
+  assert.deepEqual(events[0], { event: "start", slides: 3 });
+  const last = events.at(-1);
+  assert.deepEqual(Object.keys(last), ["event", "path", "slides", "clips", "bytes"]);
+  assert.equal(last.event, "done");
+  assert.equal(last.path, out);
+  assert.equal(last.slides, hasEncoder ? 4 : 3);
+  assert.equal(last.clips, hasEncoder ? 1 : 0);
+  assert.equal(last.bytes, readFileSync(out).length);
+  assert.equal(events.at(-2).event, "write");
+  assert.ok(events.some((e) => e.event === "slide" && e.states > 1));
+  assert.ok(events.some((e) => e.event === "state"));
+  // What stderr says is also a notice event, and "Wrote N slides" is not on stdout.
+  const notices = events.filter((e) => e.event === "notice").map((e) => e.text);
+  assert.ok(notices.length > 0);
+  for (const text of notices) assert.ok(stderr.includes(text));
+  assert.doesNotMatch(stdout, /Wrote /);
+});
+
+test("--progress json: a deck that doesn't exist ends with an error line and exit code 1", async () => {
+  await assert.rejects(cli([join(work, "missing.md"), join(work, "x.pptx"), "--progress", "json"]), (err) => {
+    assert.equal(err.code, 1);
+    const events = jsonLines(err.stdout);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].event, "error");
+    assert.match(events[0].message, /not found.*missing\.md/);
+    return true;
+  });
+});
+
+// The pid of the CLI's Slidev child (the dev server), found among the CLI's own children.
+function slidevChild(pid) {
+  let kids = [];
+  try {
+    kids = execFileSync("pgrep", ["-P", String(pid)], { encoding: "utf8" }).split(/\s+/).filter(Boolean);
+  } catch {
+    // no children (yet)
+  }
+  return kids.find((k) => /slidev/.test(readFileSync(`/proc/${k}/cmdline`, "utf8"))) ?? null;
+}
+const alive = (pid) => {
+  try {
+    process.kill(Number(pid), 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+for (const [signal, code] of [["SIGTERM", 143], ["SIGINT", 130]]) {
+  test(`${signal} stops the export: exit ${code}, a stopped error line, no file, no Slidev left`, { ...opts, skip: opts.skip || process.platform !== "linux" && "needs /proc and pgrep" }, async () => {
+    const dir = mkdtempSync(join(work, "stop-"));
+    const child = spawn(process.execPath, [join(ROOT, "bin/cli.mjs"), SLIDES, join(dir, "out.pptx"), "--animations", "--progress", "json"], { cwd: work, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.resume();
+    const exited = new Promise((r) => child.on("close", (c, s) => r({ c, s })));
+    const until = async (ok, what) => {
+      for (const end = Date.now() + 120000; Date.now() < end; await new Promise((r) => setTimeout(r, 100))) if (ok()) return;
+      child.kill("SIGKILL");
+      throw new Error(`timed out waiting for ${what}`);
+    };
+    await until(() => out.includes('"event":"start"'), "the start event");
+    const slidev = slidevChild(child.pid);
+    assert.ok(slidev, "the Slidev dev server is a child of the CLI");
+    const sent = Date.now();
+    child.kill(signal);
+    const { c } = await Promise.race([exited, new Promise((_, rej) => setTimeout(() => rej(new Error("did not exit within 15 s")), 15000))]).catch((e) => {
+      child.kill("SIGKILL");
+      throw e;
+    });
+    assert.equal(c, code);
+    assert.ok(Date.now() - sent < 15000);
+    const lines = out.trim().split("\n");
+    for (const l of lines) JSON.parse(l);
+    assert.deepEqual(JSON.parse(lines.at(-1)), { event: "error", message: "stopped" });
+    assert.deepEqual(readdirSync(dir), []);
+    assert.equal(alive(slidev), false, "Slidev is gone");
+  });
+}

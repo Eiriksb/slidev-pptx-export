@@ -12,10 +12,13 @@ export const ENCODER_HINT = "install ffmpeg with libx264, or GStreamer with x264
 const CRF = "23";
 const KEYFRAME_EVERY = "15";
 
-// `run`: spawnSync, or a stand-in for tests.
-export function findEncoder({ run = spawnSync } = {}) {
-  const ffmpeg = run("ffmpeg", ["-hide_banner", "-encoders"], { encoding: "utf8" });
-  if (ffmpeg.status === 0 && /\blibx264\b/.test(ffmpeg.stdout || "")) return { kind: "ffmpeg" };
+// `ffmpeg`: a program to try before the one on PATH (render.ffmpeg, SLIDEV_PPTX_FFMPEG). `run`:
+// spawnSync, or a stand-in for tests.
+export function findEncoder({ run = spawnSync, ffmpeg: named } = {}) {
+  for (const bin of named && named !== "ffmpeg" ? [named, "ffmpeg"] : ["ffmpeg"]) {
+    const res = run(bin, ["-hide_banner", "-encoders"], { encoding: "utf8" });
+    if (res.status === 0 && /\blibx264\b/.test(res.stdout || "")) return { kind: "ffmpeg", bin };
+  }
   const has = (element) => run("gst-inspect-1.0", [element], { stdio: "ignore" }).status === 0;
   return has("x264enc") && has("mp4mux") ? { kind: "gstreamer" } : null;
 }
@@ -24,11 +27,11 @@ export function findEncoder({ run = spawnSync } = {}) {
 // JPEG's range otherwise reaches the clip unconverted, and it plays brighter than the pictures around
 // it. It needs no h264parse when x264enc is asked for avc directly, and h264parse is often missing.
 // Both tools read the frames' path as a printf pattern, so a % in the folder's own name is doubled.
-export function encoderArgs(kind, { dir, count, fps, out }) {
+export function encoderArgs(kind, { dir, count, fps, out, bin = "ffmpeg" }) {
   const frames = join(dir.replace(/%/g, "%%"), "f%05d.jpg");
   if (kind === "ffmpeg") {
     return {
-      bin: "ffmpeg",
+      bin,
       args: ["-y", "-hide_banner", "-loglevel", "error", "-framerate", String(fps), "-i", frames, "-frames:v", String(count), "-c:v", "libx264", "-preset", "medium", "-crf", CRF, "-bf", "0", "-g", KEYFRAME_EVERY, "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", out],
     };
   }
@@ -49,7 +52,7 @@ export function encodeClip(encoder, { dir, count, fps }, { run = spawnSync } = {
   const work = mkdtempSync(join(tmpdir(), "pptx-clip-"));
   try {
     const out = join(work, "clip.mp4");
-    const { bin, args } = encoderArgs(encoder.kind, { dir, count, fps, out });
+    const { bin, args } = encoderArgs(encoder.kind, { dir, count, fps, out, bin: encoder.bin });
     const res = run(bin, args, { encoding: "utf8", stdio: ["ignore", "ignore", "pipe"] });
     if (res.status !== 0) {
       const line = String(res.stderr || "").split("\n").find((l) => l.trim());

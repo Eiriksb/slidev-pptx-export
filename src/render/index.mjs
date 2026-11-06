@@ -4,11 +4,13 @@
 
 import { dirname, resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { onStop } from "../stop.mjs";
 import { startDeckServer } from "./server.mjs";
 import { loadChromium } from "./browser.mjs";
 import { captureDeck } from "./capture.mjs";
 import { captureClickStates } from "./click-states.mjs";
 import { slideSpecs } from "./animated.mjs";
+import { findEncoder as findClipEncoder } from "./encode.mjs";
 import { animateVideos as animateSlideVideos, hasFfmpeg, videosToAnimate } from "./animate.mjs";
 import { pictureNotice, sceneNotices, sceneToSpec, shapesOf, unitsFor } from "./scene.mjs";
 import { deckStyle, layoutOne, groupedBarChart } from "../layout.mjs";
@@ -110,13 +112,14 @@ export function uncoveredSignatures(scenes, repeated) {
 
 // Videos LibreOffice Impress can't show (one with slide content over it, a slide's second video)
 // become looping animated pictures (see animate.mjs), unless `mode` is "native". Without ffmpeg they
-// stay videos, with a notice. `deps`: { gif, rate } stand-ins for ffmpeg (tests).
+// stay videos, with a notice. `deps`: { gif, rate } stand-ins for ffmpeg (tests); `bin`: the ffmpeg to run.
 function animateVideos(scenes, mode, deps = {}) {
   if (mode === "native") return;
-  const stub = deps.gif ? { gif: deps.gif, rate: deps.rate || (() => 25) } : {};
+  const bin = deps.bin || "ffmpeg";
+  const stub = deps.gif ? { gif: deps.gif, rate: deps.rate || (() => 25), bin } : { bin };
   for (const s of scenes) {
     if (!videosToAnimate(s.nodes).length) continue;
-    if (!stub.gif && !hasFfmpeg()) {
+    if (!stub.gif && !hasFfmpeg(bin)) {
       console.warn(`Notice: slide ${s.index}: videos LibreOffice can't show stay videos (no ffmpeg to make them animated pictures).`);
       continue;
     }
@@ -160,28 +163,41 @@ function animatedResult(captured, { inputPath, parsed, codeStore, config, style,
     }
     specs.push(...slideSpecs(slide, sceneStyle));
   }
-  return { specs, style, screenshots: specs.map(() => null), translatedCharts: chartsIn(specs), masterShapes: [] };
+  const clips = captured.slides.reduce((n, s) => n + (s.clicks || []).filter((c) => c?.kind === "motion").length, 0);
+  return { specs, style, screenshots: specs.map(() => null), translatedCharts: chartsIn(specs), masterShapes: [], clips };
 }
 
-export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, codeStore, screenshots = false, deps = {} }) {
-  const { start = startDeckServer, chromiumFor = loadChromium, capture = captureDeck, captureStates = captureClickStates } = deps;
+export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, codeStore, screenshots = false, handleSignals = true, deps = {}, onProgress = () => {} }) {
+  const { start = startDeckServer, chromiumFor = loadChromium, capture = captureDeck, captureStates = captureClickStates, findEncoder = findClipEncoder } = deps;
   const unused = UNUSED_KEYS.filter((k) => userConfig[k] != null);
   if (unused.length) console.warn(`Notice: render mode ignores ${unused.join(", ")} from pptx.config.mjs - the rendered page already shows them.`);
 
   // Playwright and its Chromium first: a missing package or browser fails before Slidev starts.
-  const chromium = await chromiumFor(dirname(inputPath));
+  // The variables name programs on this computer, a config travels with the deck: the variables win.
+  const executablePath = process.env.SLIDEV_PPTX_BROWSER ?? config.render?.browser;
+  const ffmpeg = process.env.SLIDEV_PPTX_FFMPEG ?? config.render?.ffmpeg;
+  const browserOptions = executablePath ? { executablePath } : undefined;
+  // `handleSignals: false` (the CLI, which stops the export itself on SIGINT/SIGTERM) turns off Playwright's
+  // own handlers: its SIGINT one would exit before the export's cleanup ran. Library callers keep them.
+  const launchOptions = handleSignals === false ? { ...browserOptions, handleSIGINT: false, handleSIGTERM: false } : browserOptions;
+  const chromium = await chromiumFor(dirname(inputPath), browserOptions);
   let browser;
   try {
-    browser = await chromium.launch();
+    browser = await chromium.launch(launchOptions);
   } catch (err) {
-    throw new Error(`render mode could not launch Playwright's Chromium (${String(err.message || err).split("\n")[0]}) - run \`npx playwright install chromium\`.`, { cause: err });
+    const reason = String(err.message || err).split("\n")[0];
+    throw new Error(
+      executablePath ? `render mode could not launch the browser at ${executablePath} (${reason}).` : `render mode could not launch Playwright's Chromium (${reason}) - run \`npx playwright install chromium\`.`,
+      { cause: err },
+    );
   }
+  const forgetBrowser = onStop(() => browser.close());
   let captured;
   try {
     const server = await start({ inputPath });
     try {
-      const options = { baseUrl: server.url, browser, timeout: config.render?.timeout ?? 15000, slidevVersion: server.version };
-      captured = config.render?.animations ? await captureStates(options) : await capture({ ...options, screenshots });
+      const options = { baseUrl: server.url, browser, timeout: config.render?.timeout ?? 15000, slidevVersion: server.version, onProgress };
+      captured = config.render?.animations ? await captureStates({ ...options, encoder: findEncoder({ ffmpeg }) }) : await capture({ ...options, screenshots });
     } catch (err) {
       // A deck that fails to build or boot shows up here; Slidev's own output says why.
       const output = server.log();
@@ -191,6 +207,7 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
       await server.stop();
     }
   } finally {
+    forgetBrowser();
     await browser.close();
   }
 
@@ -204,7 +221,7 @@ export async function renderSpecs({ inputPath, userConfig = {}, config, parsed, 
   if (config.render?.animations) return animatedResult(captured, { inputPath, parsed, codeStore, config, style, sceneStyle });
 
   const rendered = captured.slides.filter((s) => !s.error);
-  animateVideos(rendered, config.render?.videos ?? "animated", { gif: deps.gif, rate: deps.rate });
+  animateVideos(rendered, config.render?.videos ?? "animated", { gif: deps.gif, rate: deps.rate, bin: ffmpeg });
   // Resolver charts first: a resolved chart is a chart, never a shared picture on the master.
   for (const s of rendered) {
     for (const node of s.nodes) if (node.kind === "chart" || node.kind === "raster") resolveChart(node, config, style);

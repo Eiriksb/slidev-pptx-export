@@ -4,6 +4,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { onStop } from "../stop.mjs";
 import { join, dirname, basename, resolve as resolvePath } from "node:path";
 
 // @slidev/cli as the deck sees it: in its own node_modules or any parent's (workspaces hoist it).
@@ -58,13 +59,17 @@ export async function startDeckServer({ inputPath, timeout = 60000 }) {
     exited = code ?? signal ?? "unknown";
   });
   const log = () => lines.filter((l) => l.trim()).join("\n");
+  // `forget` is replaced once `stop` exists: when a stop has already begun, onStop runs `stop` at once.
+  let forget = () => {};
   const stop = () =>
     new Promise((resolve) => {
+      forget();
       if (exited !== null) return resolve();
       child.once("close", () => resolve());
       child.kill();
       setTimeout(() => child.kill("SIGKILL"), 3000).unref();
     });
+  forget = onStop(() => stop());
 
   // Slidev is asked to bind 127.0.0.1, but some versions listen on "localhost" anyway, which can be
   // the IPv6 loopback only (Slidev 53 on Linux): whichever answers is the deck's address.

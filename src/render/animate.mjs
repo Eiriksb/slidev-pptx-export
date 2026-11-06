@@ -44,10 +44,10 @@ export function videosToAnimate(nodes) {
   ];
 }
 
-let ffmpegFound;
+const ffmpegFound = new Map();
 export function hasFfmpeg(bin = "ffmpeg") {
-  if (ffmpegFound === undefined) ffmpegFound = spawnSync(bin, ["-version"], { stdio: "ignore" }).status === 0;
-  return ffmpegFound;
+  if (!ffmpegFound.has(bin)) ffmpegFound.set(bin, spawnSync(bin, ["-version"], { stdio: "ignore" }).status === 0);
+  return ffmpegFound.get(bin);
 }
 
 function withFile(data, fn) {
@@ -111,17 +111,17 @@ export function gifPlan({ shown, aspect, duration, rate, background, budget = 30
 }
 
 // Turns a slide's videos that Impress can't show (videosToAnimate) into animated pictures in place
-// (same box, same object-fit crop). `scale`: GIF pixels per CSS pixel of the part shown. Returns what
-// was done, for notices.
-export function animateVideos(scene, { scale = 1.25, budget, gif = videoGif, rate = frameRate } = {}) {
+// (same box, same object-fit crop). `scale`: GIF pixels per CSS pixel of the part shown. `bin`: the
+// ffmpeg to run. Returns what was done, for notices.
+export function animateVideos(scene, { scale = 1.25, budget, bin = "ffmpeg", gif = videoGif, rate = frameRate } = {}) {
   const done = [];
   for (const { node, background } of videosToAnimate(scene.nodes)) {
     // the part of the video in view under object-fit: cover is narrower than the whole width
     const aspect = node.natural.w / node.natural.h;
     const shown = Math.min(node.natural.w, node.rect.w * scale * Math.max(1, aspect / (node.rect.w / node.rect.h)));
     try {
-      const p = gifPlan({ shown, aspect, duration: node.duration, rate: rate(node.data), background, ...(budget ? { budget } : {}) });
-      const data = gif(node.data, { ...p, loop: node.loop !== false });
+      const p = gifPlan({ shown, aspect, duration: node.duration, rate: rate(node.data, bin), background, ...(budget ? { budget } : {}) });
+      const data = gif(node.data, { ...p, loop: node.loop !== false, bin });
       const natural = { w: p.width, h: Math.round(p.width / aspect) };
       Object.assign(node, { kind: "image", data, ext: "gif", format: "gif", natural, radius: node.radius || 0 });
       done.push({ label: node.label, background, bytes: data.length, ...p, cut: !!node.duration && p.seconds < Math.min(node.duration, 20) - 0.05 });

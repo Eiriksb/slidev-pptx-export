@@ -19,8 +19,10 @@ function setup(md, { userConfig = {}, slides, canvas = { w: 980, h: 552 }, captu
   const calls = { started: 0, stopped: 0, closed: 0 };
   const browser = { close: async () => { calls.closed++; } };
   const deps = {
-    chromiumFor: async () => ({
-      launch: async () => {
+    chromiumFor: async (dir, opts) => ({
+      launch: async (options) => {
+        calls.chromiumForArgs = opts;
+        calls.launchArgs = options;
         if (launchError) throw launchError;
         return browser;
       },
@@ -417,3 +419,107 @@ test("with animations on, videos: native says nothing", async () => {
   assert.ok(!warnings.some((w) => /render\.videos/.test(w)), warnings.join("\n"));
 });
 
+
+test("a named browser (render.browser or SLIDEV_PPTX_BROWSER) is passed to chromiumFor and launch; without one, no executablePath", async () => {
+  const saved = process.env.SLIDEV_PPTX_BROWSER;
+  try {
+    delete process.env.SLIDEV_PPTX_BROWSER;
+    const none = setup("# A\n", { slides: [scene(1, 0, "A")] });
+    await renderSpecs(none.args);
+    assert.deepEqual(none.calls.launchArgs ?? {}, {}, "by default Playwright keeps its own signal handling");
+    assert.equal(none.calls.chromiumForArgs?.executablePath, undefined);
+
+    const cfg = setup("# A\n", { userConfig: { render: { browser: "/opt/shell" } }, slides: [scene(1, 0, "A")] });
+    await renderSpecs(cfg.args);
+    assert.deepEqual(cfg.calls.launchArgs, { executablePath: "/opt/shell" });
+    assert.deepEqual(cfg.calls.chromiumForArgs, { executablePath: "/opt/shell" });
+
+    process.env.SLIDEV_PPTX_BROWSER = "/opt/env-shell";
+    const env = setup("# A\n", { slides: [scene(1, 0, "A")] });
+    await renderSpecs(env.args);
+    assert.deepEqual(env.calls.launchArgs, { executablePath: "/opt/env-shell" });
+    assert.deepEqual(env.calls.chromiumForArgs, { executablePath: "/opt/env-shell" });
+  } finally {
+    if (saved === undefined) delete process.env.SLIDEV_PPTX_BROWSER;
+    else process.env.SLIDEV_PPTX_BROWSER = saved;
+  }
+});
+
+test("render.ffmpeg is the program for animated pictures", async () => {
+  const video = { kind: "video", data: Buffer.from("v"), muted: true, rect: { x: 0, y: 0, w: 400, h: 300 }, natural: { w: 400, h: 300 }, duration: 2, label: "clip" };
+  const cover = { kind: "box", rect: { x: 10, y: 10, w: 100, h: 100 }, fill: C("FFFFFF") };
+  const { args } = setup("# One\n", { userConfig: { render: { ffmpeg: "/opt/ff/ffmpeg" } }, slides: [scene(1, 0, "One", [video, cover])] });
+  const seen = [];
+  await withWarnings(() => renderSpecs({ ...args, deps: { ...args.deps, gif: (d, o) => { seen.push(o.bin); return Buffer.from("g"); } } }));
+  assert.deepEqual(seen, ["/opt/ff/ffmpeg"]);
+});
+
+test("render.ffmpeg is the program for recorded clips", async () => {
+  const { args } = setup("# One\n", { userConfig: { render: { animations: true, ffmpeg: "/opt/ff/ffmpeg" } } });
+  let encoder;
+  const deps = { ...animatedDeps(args, [stateSlide(1, 0, scene(1, 0, "One"))]), findEncoder: (o) => ({ kind: "ffmpeg", bin: o.ffmpeg }) };
+  const states = deps.captureStates;
+  deps.captureStates = async (o) => { encoder = o.encoder; return states(o); };
+  await withWarnings(() => renderSpecs({ ...args, deps }));
+  assert.deepEqual(encoder, { kind: "ffmpeg", bin: "/opt/ff/ffmpeg" });
+});
+
+test("SLIDEV_PPTX_FFMPEG names the program when the config does not", async () => {
+  const saved = process.env.SLIDEV_PPTX_FFMPEG;
+  process.env.SLIDEV_PPTX_FFMPEG = "/env/ffmpeg";
+  try {
+    const { args } = setup("# One\n", { userConfig: { render: { animations: true } } });
+    const seen = [];
+    const deps = { ...animatedDeps(args, [stateSlide(1, 0, scene(1, 0, "One"))]), findEncoder: (o) => { seen.push(o.ffmpeg); return null; } };
+    await withWarnings(() => renderSpecs({ ...args, deps }));
+    assert.deepEqual(seen, ["/env/ffmpeg"]);
+  } finally {
+    if (saved === undefined) delete process.env.SLIDEV_PPTX_FFMPEG; else process.env.SLIDEV_PPTX_FFMPEG = saved;
+  }
+});
+
+test("handleSignals: false (the CLI, which stops the export itself) turns Playwright's SIGINT/SIGTERM handling off", async () => {
+  const off = setup("# A\n", { slides: [scene(1, 0, "A")] });
+  await renderSpecs({ ...off.args, handleSignals: false });
+  assert.equal(off.calls.launchArgs.handleSIGINT, false);
+  assert.equal(off.calls.launchArgs.handleSIGTERM, false);
+  const on = setup("# A\n", { slides: [scene(1, 0, "A")] });
+  await renderSpecs({ ...on.args, handleSignals: true });
+  assert.equal(on.calls.launchArgs?.handleSIGINT, undefined);
+});
+
+test("SLIDEV_PPTX_BROWSER wins over render.browser, and SLIDEV_PPTX_FFMPEG over render.ffmpeg", async () => {
+  const saved = { b: process.env.SLIDEV_PPTX_BROWSER, f: process.env.SLIDEV_PPTX_FFMPEG };
+  process.env.SLIDEV_PPTX_BROWSER = "/env/browser";
+  process.env.SLIDEV_PPTX_FFMPEG = "/env/ffmpeg";
+  try {
+    const { args, calls } = setup("# One\n", { userConfig: { render: { animations: true, browser: "/cfg/browser", ffmpeg: "/cfg/ffmpeg" } } });
+    const seen = [];
+    const deps = { ...animatedDeps(args, [stateSlide(1, 0, scene(1, 0, "One"))]), findEncoder: (o) => { seen.push(o.ffmpeg); return null; } };
+    await withWarnings(() => renderSpecs({ ...args, deps }));
+    assert.deepEqual(calls.launchArgs, { executablePath: "/env/browser" });
+    assert.deepEqual(seen, ["/env/ffmpeg"]);
+  } finally {
+    if (saved.b === undefined) delete process.env.SLIDEV_PPTX_BROWSER; else process.env.SLIDEV_PPTX_BROWSER = saved.b;
+    if (saved.f === undefined) delete process.env.SLIDEV_PPTX_FFMPEG; else process.env.SLIDEV_PPTX_FFMPEG = saved.f;
+  }
+});
+
+test("a named browser that won't launch is reported by its path, with no npx advice; without one the advice stays", async () => {
+  const saved = process.env.SLIDEV_PPTX_BROWSER;
+  delete process.env.SLIDEV_PPTX_BROWSER;
+  try {
+    const launchError = new Error("browserType.launch: spawn /opt/shell ENOENT\nCall log: ...");
+    const named = setup("# A\n", { userConfig: { render: { browser: "/opt/shell" } }, launchError });
+    await assert.rejects(renderSpecs(named.args), (err) => {
+      assert.equal(err.message, "render mode could not launch the browser at /opt/shell (browserType.launch: spawn /opt/shell ENOENT).");
+      assert.ok(!err.message.includes("npx"));
+      return true;
+    });
+    process.env.SLIDEV_PPTX_BROWSER = "/env/shell";
+    const fromEnv = setup("# A\n", { launchError });
+    await assert.rejects(renderSpecs(fromEnv.args), /could not launch the browser at \/env\/shell \(/);
+  } finally {
+    if (saved === undefined) delete process.env.SLIDEV_PPTX_BROWSER; else process.env.SLIDEV_PPTX_BROWSER = saved;
+  }
+});

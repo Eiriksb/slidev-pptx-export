@@ -20,9 +20,36 @@ function makeFrames(t, count, prefix = "pptx-encode-test-") {
 
 test("ffmpeg with libx264 is preferred, then GStreamer with x264enc and mp4mux, then nothing", () => {
   const fake = (present) => (bin) => ({ status: present[bin] ? 0 : 1, stdout: bin === "ffmpeg" && present.x264 ? " V..... libx264 " : "" });
-  assert.deepEqual(findEncoder({ run: fake({ ffmpeg: true, x264: true }) }), { kind: "ffmpeg" });
+  assert.deepEqual(findEncoder({ run: fake({ ffmpeg: true, x264: true }) }), { kind: "ffmpeg", bin: "ffmpeg" });
   assert.deepEqual(findEncoder({ run: fake({ ffmpeg: true, "gst-inspect-1.0": true }) }), { kind: "gstreamer" });
   assert.equal(findEncoder({ run: fake({}) }), null);
+});
+
+test("a named ffmpeg with libx264 is used before the one on PATH", () => {
+  const seen = [];
+  const run = (bin) => { seen.push(bin); return { status: 0, stdout: " V..... libx264 " }; };
+  assert.deepEqual(findEncoder({ run, ffmpeg: "/opt/ff/ffmpeg" }), { kind: "ffmpeg", bin: "/opt/ff/ffmpeg" });
+  assert.equal(seen[0], "/opt/ff/ffmpeg");
+});
+
+test("a named ffmpeg that is missing or lacks libx264 gives way to the one on PATH", () => {
+  const seen = [];
+  const run = (bin) => { seen.push(bin); return bin === "ffmpeg" ? { status: 0, stdout: " V..... libx264 " } : { status: 0, stdout: " V..... mpeg4 " }; };
+  assert.deepEqual(findEncoder({ run, ffmpeg: "/opt/ff/ffmpeg" }), { kind: "ffmpeg", bin: "ffmpeg" });
+  assert.deepEqual(seen, ["/opt/ff/ffmpeg", "ffmpeg"]);
+  const missing = (bin) => (bin === "ffmpeg" ? { status: 0, stdout: "libx264" } : { status: null, error: new Error("ENOENT"), stdout: null });
+  assert.deepEqual(findEncoder({ run: missing, ffmpeg: "/nope" }), { kind: "ffmpeg", bin: "ffmpeg" });
+});
+
+test("ffmpeg's arguments start with the named program", () => {
+  assert.equal(encoderArgs("ffmpeg", { dir: "/d", count: 3, fps: 30, out: "/o.mp4", bin: "/opt/ff/ffmpeg" }).bin, "/opt/ff/ffmpeg");
+});
+
+test("a clip is encoded with the encoder's own program", (t) => {
+  const seen = [];
+  const run = (bin) => { seen.push(bin); return { status: 1, stderr: "stop" }; };
+  assert.throws(() => encodeClip({ kind: "ffmpeg", bin: "/opt/ff/ffmpeg" }, makeFrames(t, 1), { run }), /\/opt\/ff\/ffmpeg failed: stop/);
+  assert.deepEqual(seen, ["/opt/ff/ffmpeg"]);
 });
 
 test("GStreamer counts only with both elements", () => {

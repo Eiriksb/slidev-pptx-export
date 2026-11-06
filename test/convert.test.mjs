@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -120,4 +120,10 @@ test("two exports of the same deck are byte-identical", async () => {
   const a = await exportFixture("a.pptx");
   const b = await exportFixture("b.pptx");
   assert.ok(a.buffer.equals(b.buffer));
+});
+
+test("the output folder holds only the finished .pptx, no temporary file", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "slidev-pptx-empty-"));
+  await convert({ inputPath: join(DIR, "slides.md"), outputPath: join(dir, "deck.pptx"), config: fixtureConfig, configDir: DIR });
+  assert.deepEqual(readdirSync(dir), ["deck.pptx"]);
 });

@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { animateVideos, coveredVideos, frameRate, gifPlan, hasFfmpeg, videoGif, videosToAnimate } from "../src/render/animate.mjs";
 
 const video = (extra = {}) => ({ kind: "video", data: Buffer.from("mp4"), muted: true, loop: true, duration: 9, rect: { x: 0, y: 0, w: 980, h: 552 }, natural: { w: 1600, h: 900 }, label: "video", ...extra });
@@ -63,7 +66,7 @@ test("a video becomes an animated picture in the same box", () => {
   assert.equal(v.ext, "gif");
   assert.equal(v.fit, "cover");
   assert.deepEqual(v.rect, { x: 0, y: 0, w: 980, h: 552 });
-  assert.deepEqual(calls[0], { width: 1227, fps: 25, seconds: 9, loop: true });
+  assert.deepEqual(calls[0], { width: 1227, fps: 25, seconds: 9, loop: true, bin: "ffmpeg" });
   assert.deepEqual(v.natural, { w: 1227, h: 690 });
   assert.equal(done[0].cut, false);
 });
@@ -79,6 +82,24 @@ test("a failed conversion leaves the video as it was", () => {
   const done = animateVideos({ nodes: [v, title] }, { gif: () => { throw new Error("no"); }, rate: () => 25 });
   assert.equal(v.kind, "video");
   assert.equal(done[0].error, "no");
+});
+
+test("whether ffmpeg is there is remembered per program, not once for all", { skip: process.platform === "win32" }, (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "pptx-ff-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const fake = join(dir, "ffmpeg");
+  writeFileSync(fake, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  assert.equal(hasFfmpeg("/nope/ffmpeg"), false);
+  assert.equal(hasFfmpeg(fake), true);
+  assert.equal(hasFfmpeg("/nope/ffmpeg"), false);
+});
+
+test("animateVideos hands its program to the GIF maker and the frame-rate reader", () => {
+  const seen = [];
+  const node = { kind: "video", data: Buffer.from("v"), muted: true, rect: { x: 0, y: 0, w: 100, h: 100 }, natural: { w: 100, h: 100 }, duration: 2 };
+  const cover = { kind: "box", rect: { x: 0, y: 0, w: 50, h: 50 }, fill: { hex: "FFFFFF", alpha: 1 } };
+  animateVideos({ nodes: [node, cover] }, { bin: "/opt/ff/ffmpeg", gif: (d, o) => { seen.push(["gif", o.bin]); return Buffer.from("g"); }, rate: (d, b) => { seen.push(["rate", b]); return 25; } });
+  assert.deepEqual(seen, [["rate", "/opt/ff/ffmpeg"], ["gif", "/opt/ff/ffmpeg"]]);
 });
 
 test("videoGif makes a looping GIF at the frame rate asked; frameRate reads a video's", { skip: !hasFfmpeg() }, () => {
